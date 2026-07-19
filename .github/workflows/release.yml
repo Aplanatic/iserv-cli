@@ -1,0 +1,29 @@
+name: Publish private package
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://npm.pkg.github.com
+          scope: '@aplanatic'
+      - name: Authorize private API dependency
+        run: git config --global 'url.https://x-access-token:${{ github.token }}@github.com/.insteadOf' 'ssh://git@github.com/'
+      - run: npm ci
+      - name: Check package version
+        run: test "$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME#v}"
+      - run: npm run check
+      - run: npm publish --access restricted
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
