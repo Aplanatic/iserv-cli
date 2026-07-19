@@ -1,0 +1,47 @@
+{
+  "name": "@aplanatic/iserv-cli",
+  "version": "0.1.0",
+  "description": "Cross-platform CLI for normal-user IServ access",
+  "type": "module",
+  "bin": {
+    "iserv": "dist/main.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsx src/main.ts",
+    "lint": "biome check src tests",
+    "lint:fix": "biome check --write src tests",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check:sensitive": "node scripts/check-sensitive.mjs",
+    "check": "npm run check:sensitive && npm run lint && npm run typecheck && npm test && npm run build",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@aplanatic/iserv-api": "github:Aplanatic/iserv-api#main",
+    "@inquirer/prompts": "^7.8.6",
+    "commander": "^14.0.2",
+    "open": "^11.0.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.4",
+    "@types/node": "^24.10.0",
+    "tsdown": "^0.22.11",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Aplanatic/iserv-cli.git"
+  }
+}
