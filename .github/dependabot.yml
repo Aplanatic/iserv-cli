@@ -1,13 +1,12 @@
 version: 2
 registries:
-  aplanatic-github:
-    type: git
-    url: https://github.com
-    username: x-access-token
-    password: ${{ secrets.APLANATIC_REPO_TOKEN }}
+  aplanatic-packages:
+    type: npm-registry
+    url: https://npm.pkg.github.com
+    token: ${{ secrets.APLANATIC_PACKAGES_TOKEN }}
 updates:
   - package-ecosystem: npm
     directory: /
     schedule: { interval: weekly }
-    registries: [aplanatic-github]
+    registries: [aplanatic-packages]
     open-pull-requests-limit: 5

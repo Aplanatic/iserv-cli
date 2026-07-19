@@ -3,6 +3,14 @@
 Private, unofficial command-line access to the normal-user features of an
 IServ instance. It does not require or attempt to obtain administrator rights.
 
+## Install
+
+Authenticate npm for the private Aplanatic GitHub Packages registry, then run:
+
+```sh
+npm install --global @aplanatic/iserv-cli
+```
+
 ## Login
 
 ```sh

@@ -1,4 +1,5 @@
 node_modules/
+.aplanatic-ci/
 dist/
 coverage/
 .lore/

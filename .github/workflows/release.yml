@@ -18,12 +18,12 @@ jobs:
           node-version: 24
           registry-url: https://npm.pkg.github.com
           scope: '@aplanatic'
-      - name: Authorize private API dependency
-        run: git config --global 'url.https://x-access-token:${{ secrets.APLANATIC_REPO_TOKEN }}@github.com/.insteadOf' 'ssh://git@github.com/'
-      - run: npm ci
+      - uses: Aplanatic/iserv-api/.github/actions/install-package@main
       - name: Check package version
         run: test "$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME#v}"
       - run: npm run check
+      - name: Restore released API dependency
+        run: npm pkg set 'dependencies.@aplanatic/iserv-api=^1.5.1'
       - run: npm publish --access restricted
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
