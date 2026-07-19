@@ -19,7 +19,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - name: Authorize private API dependency
-        run: git config --global 'url.https://x-access-token:${{ github.token }}@github.com/.insteadOf' 'ssh://git@github.com/'
+        run: git config --global 'url.https://x-access-token:${{ secrets.APLANATIC_REPO_TOKEN }}@github.com/.insteadOf' 'ssh://git@github.com/'
       - run: npm ci
       - run: npm run check
       - run: npm audit --audit-level=high
