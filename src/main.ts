@@ -23,7 +23,7 @@ const helpStyle = uiStyle();
 program
   .name("iserv")
   .description("A calm, secure command line for your IServ account")
-  .version("0.6.3")
+  .version("0.6.4")
   .showSuggestionAfterError()
   .showHelpAfterError("Run with --help to see available commands.")
   .configureHelp({
@@ -747,6 +747,38 @@ messenger
       empty: "No joined rooms.",
     }),
   );
+messenger
+  .command("contacts")
+  .description("List DM contacts with resolved display names")
+  .action(async () => {
+    try {
+      const contacts = await (
+        await restoreMessengerClient()
+      ).messenger.getContacts();
+      if (jsonOutput()) {
+        print(contacts, true);
+        return;
+      }
+      if (contacts.length === 0) {
+        print([], false, {
+          title: "Messenger contacts",
+          empty: "No direct-message contacts.",
+        });
+        return;
+      }
+      const lines = [
+        "Messenger contacts",
+        ...contacts.map((contact) =>
+          contact.note
+            ? `  ${contact.name} (${contact.shortId}) – ${contact.note}`
+            : `  ${contact.name} (${contact.shortId})`,
+        ),
+      ];
+      process.stdout.write(`${lines.join("\n")}\n`);
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 messenger
   .command("messages <roomId>")
   .description("List a bounded page of room messages")
