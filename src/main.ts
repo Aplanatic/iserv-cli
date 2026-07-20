@@ -351,14 +351,11 @@ routes
   )
   .action(async (routeId, options) => {
     try {
-      print(
-        await (await restoreClient()).executeReadRoute(
-          routeId,
-          parseParameters(options.param),
-        ),
-        jsonOutput(),
-        { title: `Probe · ${routeId}` },
+      const result = await (await restoreClient()).executeReadRoute(
+        routeId,
+        parseParameters(options.param),
       );
+      printReadRoute(`Probe \u00B7 ${routeId}`, result, jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
     }
@@ -373,7 +370,10 @@ routes
         routeIds.map((routeId) => ({ routeId })),
         { concurrency: boundedLimit(options.concurrency, 8) },
       );
-      print(results, jsonOutput(), { title: "Read-only batch", maxRows: 8 });
+      for (const result of results) {
+        printReadRoute(result.routeId, result, jsonOutput());
+        process.stdout.write("\n");
+      }
     } catch (error) {
       fail(error, jsonOutput());
     }

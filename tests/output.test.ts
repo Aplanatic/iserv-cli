@@ -112,10 +112,10 @@ describe("human output", () => {
         printRoute(route, false, { color: false, width: 96 });
       }),
     ).toMatchInlineSnapshot(`
-      "Routes matching “calendar”  1
+      "Routes matching "calendar"  1
         Method   Id                  Module     Status      Summary
         GET      calendar.upcoming   calendar   supported   List upcoming calendar events
-      Routes  1 routes · 1 modules
+      Routes  1 routes \u00b7 1 modules
 
       Calendar
         GET      calendar.upcoming  /iserv/calendar/api/upcoming
@@ -134,7 +134,7 @@ describe("human output", () => {
         Name    In      Required   Description
         limit   query   no         Maximum events
 
-      Provenance  Upstream sdk · src/Calendar/CalendarService.ts
+      Provenance  Upstream sdk \u00b7 src/Calendar/CalendarService.ts
       "
     `);
   });
@@ -209,7 +209,7 @@ describe("human output", () => {
 
       Capabilities  1 available · live checked
         Module     Access         Verified Reads   Catalogued
-        calendar   available      3                4 read · 1 send/create · 1 destruct…
+        calendar   available      3                4 read · 1 send/create · 1 destructive
         pinboard   experimental   0                0 read
 
       1 module(s) are experimental, unavailable, or not installed. Write permissions are checked only when an action runs.
@@ -222,7 +222,7 @@ describe("human output", () => {
     `);
   });
 
-  test("renders a calm read-only module result without page content", () => {
+  test("renders a read-only module result with html-extracted data", () => {
     expect(
       captureStdout(() =>
         printReadRoute(
@@ -232,13 +232,33 @@ describe("human output", () => {
             status: 200,
             durationMs: 82,
             data: {
-              kind: "html-structure",
+              kind: "html-extracted",
+              title: "Past Exercises - IServ",
+              tables: [
+                {
+                  caption: "Exercise List",
+                  headers: ["Subject", "Due Date"],
+                  rows: [
+                    { Subject: "Math", "Due Date": "2026-07-25" },
+                    { Subject: "English", "Due Date": "2026-07-28" },
+                  ],
+                },
+              ],
+              keyValues: { Teacher: "Mr. Smith", Class: "12A" },
+              lists: [
+                { label: "Attachments", items: ["worksheet.pdf", "notes.pdf"] },
+              ],
+              sections: [
+                {
+                  level: 2,
+                  heading: "Instructions",
+                  content: ["Complete all exercises by the due date."],
+                },
+              ],
+              links: [{ text: "Submit", href: "/iserv/exercise/submit/1" }],
+              forms: [],
+              metadata: { _user: "student", _csrf_present: "yes" },
               bytes: 12345,
-              links: 12,
-              headings: 1,
-              tables: 1,
-              tableRows: 4,
-              forms: { GET: 2, POST: 1 },
             },
           },
           false,
@@ -250,14 +270,68 @@ describe("human output", () => {
       ● Available  200 · 82 ms
       Route  exercise.past
 
-      Page structure
-        Rows           4
-        Tables         1
-        Headings       1
-        Links          12
-        Response size  12345 bytes
+      Page
+        Title  Past Exercises - IServ
 
-      Read-only check · page content and form values were not returned.
+      Fields
+        Teacher  Mr. Smith
+        Class    12A
+
+        Instructions
+          Complete all exercises by the due date.
+
+      Table: Exercise List  2 rows
+        Subject   Due Date
+        Math      2026-07-25
+        English   2026-07-28
+
+      Links  1
+        Submit  /iserv/exercise/submit/1
+
+      Attachments  2
+        • worksheet.pdf
+        • notes.pdf
+
+      12.1 KB page  · 1 tables  · 1 links  · 0 forms
+      "
+    `);
+  });
+
+  test("renders legacy html-structure data as key-value table", () => {
+    expect(
+      captureStdout(() =>
+        printReadRoute(
+          "Legacy",
+          {
+            routeId: "test.route",
+            status: 200,
+            durationMs: 10,
+            data: {
+              kind: "html-structure",
+              bytes: 5000,
+              links: 5,
+              headings: 2,
+              tables: 1,
+              tableRows: 3,
+              forms: { GET: 1 },
+            },
+          },
+          false,
+          { color: false },
+        ),
+      ),
+    ).toMatchInlineSnapshot(`
+      "Legacy
+      ● Available  200 · 10 ms
+      Route  test.route
+
+      Page structure
+        Headings       2
+        Tables         1
+        Table Rows     3
+        Links          5
+        Forms          {"GET":1}
+        Response size  5000 bytes
       "
     `);
   });
@@ -303,7 +377,7 @@ describe("automation and errors", () => {
         CommanderExit,
       );
     });
-    expect(json).toBe('{"error":"No active session"}\n');
+    expect(json).toBe('{"error":"No active session","code":3}\n');
   });
 
   test("uses color only when explicitly enabled in deterministic rendering", () => {

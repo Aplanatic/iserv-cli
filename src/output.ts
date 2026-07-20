@@ -1,4 +1,9 @@
-import type { AuthStatus, RouteDefinition } from "@aplanatic/iserv-api";
+import type {
+  AuthStatus,
+  HtmlExtractedData,
+  HtmlTable,
+  RouteDefinition,
+} from "@aplanatic/iserv-api";
 import { redactText, redactValue } from "@aplanatic/iserv-api/redaction";
 
 export interface PrintOptions {
@@ -14,6 +19,7 @@ export interface ReadRouteResult {
   status: number;
   durationMs: number;
   data: unknown;
+  _summary?: string;
 }
 
 type ProfileDocument = {
@@ -84,10 +90,10 @@ function scalar(value: unknown): boolean {
 }
 
 function displayValue(value: unknown): string {
-  if (value === null) return "—";
-  if (value === undefined) return "—";
+  if (value === null) return "\u2014";
+  if (value === undefined) return "\u2014";
   if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (typeof value === "string") return value || "—";
+  if (typeof value === "string") return value || "\u2014";
   if (typeof value === "number" || typeof value === "bigint")
     return String(value);
   if (Array.isArray(value))
@@ -98,15 +104,15 @@ function displayValue(value: unknown): string {
 
 function oneLine(value: unknown): string {
   return displayValue(value)
-    .replace(/\s*\r?\n\s*/g, " ↵ ")
+    .replace(/\s*\r?\n\s*/g, " \u21B5 ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function truncate(value: string, width: number): string {
   if (value.length <= width) return value;
-  if (width <= 1) return "…";
-  return `${value.slice(0, width - 1)}…`;
+  if (width <= 1) return "\u2026";
+  return `${value.slice(0, width - 1)}\u2026`;
 }
 
 function renderHeading(title: string, color: boolean, detail?: string): string {
@@ -124,7 +130,7 @@ function renderKeyValues(
   if (entries.length === 0) return [];
   const style = uiStyle(color);
   const keyWidth = Math.min(
-    24,
+    28,
     Math.max(...entries.map(([key]) => humanize(key).length)),
   );
   return entries.map(([key, value]) => {
@@ -142,7 +148,7 @@ function renderTable(
   const visibleRows = rows.slice(0, options.maxRows);
   const keys = [
     ...new Set(visibleRows.flatMap((row) => Object.keys(row))),
-  ].slice(0, 6);
+  ].slice(0, 10);
   if (keys.length === 0) return [];
 
   const available = Math.max(
@@ -151,13 +157,12 @@ function renderTable(
   );
   const preferred = keys.map((key) =>
     Math.min(
-      36,
-      Math.max(
-        humanize(key).length,
-        ...visibleRows.map((row) => oneLine(row[key]).length),
-      ),
+    40,
+    Math.max(
+      humanize(key).length,
+      ...visibleRows.map((row) => oneLine(row[key]).length),
     ),
-  );
+  ));
   const totalPreferred = preferred.reduce((sum, width) => sum + width, 0);
   const widths = preferred.map((width) =>
     totalPreferred <= available
@@ -186,7 +191,9 @@ function renderTable(
     ...visibleRows.map((row) => `  ${formatRow(row)}`),
   ];
   if (rows.length > visibleRows.length) {
-    result.push(`  ${style.dim(`… ${rows.length - visibleRows.length} more`)}`);
+    result.push(
+      `  ${style.dim(`\u2026 ${rows.length - visibleRows.length} more`)}`,
+    );
   }
   return result;
 }
@@ -300,7 +307,7 @@ export function printRouteTree(
     renderHeading(
       "Routes",
       color,
-      `${total} routes · ${modules.length} modules`,
+      `${total} routes \u00B7 ${modules.length} modules`,
     ),
   ];
   for (const [module, routes] of modules) {
@@ -336,7 +343,11 @@ export function printRoutes(
   }
   const color = options.color ?? canColor();
   const lines = [
-    renderHeading(`Routes matching “${query}”`, color, `${routes.length}`),
+    renderHeading(
+      `Routes matching "${query}"`,
+      color,
+      `${routes.length}`,
+    ),
   ];
   if (routes.length === 0) {
     lines.push(
@@ -385,15 +396,17 @@ export function printRoute(
     route.summary,
     "",
     ...renderKeyValues(
-      [
-        ["path", route.path],
-        ["module", route.module],
-        ["authentication", route.authentication],
-        ["side effect", route.sideEffect],
-        ["status", route.status],
-        ["capability", route.capability],
-        ["last verified", route.lastVerified],
-      ].filter(([, value]) => value !== undefined) as Array<[string, unknown]>,
+      (
+        [
+          ["path", route.path],
+          ["module", route.module],
+          ["authentication", route.authentication],
+          ["side effect", route.sideEffect],
+          ["status", route.status],
+          ["capability", route.capability],
+          ["last verified", route.lastVerified],
+        ] as Array<[string, unknown]>
+      ).filter(([, value]) => value !== undefined),
       color,
     ),
     "",
@@ -415,7 +428,7 @@ export function printRoute(
   }
   lines.push(
     "",
-    `${style.dim("Provenance")}  ${humanize(route.provenance.kind)} · ${route.provenance.reference}`,
+    `${style.dim("Provenance")}  ${humanize(route.provenance.kind)} \u00B7 ${route.provenance.reference}`,
   );
   process.stdout.write(`${lines.join("\n")}\n`);
 }
@@ -443,11 +456,11 @@ export function printProfiles(
     );
     for (const profile of profiles) {
       const active = profile.name === document.activeProfile;
-      const marker = active ? style.green("●") : style.dim("○");
+      const marker = active ? style.green("\u25CF") : style.dim("\u25CB");
       const name = (profile.name ?? "unnamed").padEnd(nameWidth);
       const details = [profile.username, profile.hostname]
         .filter(Boolean)
-        .join(" · ");
+        .join(" \u00B7 ");
       lines.push(
         `${marker} ${style.bold(name)}  ${style.dim(details)}`.trimEnd(),
       );
@@ -468,12 +481,13 @@ export function printAuthStatus(
   const color = options.color ?? canColor();
   const style = uiStyle(color);
   const state = status.authenticated
-    ? style.green("● Connected")
+    ? style.green("\u25CF Connected")
     : status.configured
-      ? style.yellow("● Session expired")
-      : style.dim("○ Not connected");
+      ? style.yellow("\u25CF Session expired")
+      : style.dim("\u25CB Not connected");
   const lines = [renderHeading("Session", color), state];
-  if (status.profile) lines.push(`${style.dim("Profile")}  ${status.profile}`);
+  if (status.profile)
+    lines.push(`${style.dim("Profile")}  ${status.profile}`);
   if (status.account?.displayName)
     lines.push(`${style.dim("Name")}     ${status.account.displayName}`);
   if (status.account?.username)
@@ -490,7 +504,7 @@ export function printAuthStatus(
       renderHeading(
         "Capabilities",
         color,
-        `${available.length} available · ${status.capabilitiesVerified === false ? "live check unavailable" : "live checked"}`,
+        `${available.length} available \u00B7 ${status.capabilitiesVerified === false ? "live check unavailable" : "live checked"}`,
       ),
       ...renderTable(
         status.capabilities.map((item) => ({
@@ -508,7 +522,7 @@ export function printAuthStatus(
               : "",
           ]
             .filter(Boolean)
-            .join(" · "),
+            .join(" \u00B7 "),
         })),
         {
           color,
@@ -535,7 +549,9 @@ export function printAuthStatus(
     } else {
       lines.push(
         "",
-        style.dim("Write permissions are checked only when an action runs."),
+        style.dim(
+          "Write permissions are checked only when an action runs.",
+        ),
       );
     }
   }
@@ -562,9 +578,152 @@ export function printSuccess(
   const style = uiStyle(color);
   const redacted = redactValue(details);
   const safe = isRecord(redacted) ? redacted : { result: redacted };
-  const lines = [`${style.green("✓")} ${style.bold(message)}`];
+  const lines = [`${style.green("\u2713")} ${style.bold(message)}`];
   lines.push(...renderKeyValues(Object.entries(safe), color, "  "));
   process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+// Render HTML extracted data for printReadRoute
+function renderHtmlExtracted(
+  extracted: HtmlExtractedData,
+  style: ReturnType<typeof uiStyle>,
+  options: Required<Pick<PrintOptions, "maxRows" | "color" | "width">>,
+): string[] {
+  const lines: string[] = [];
+
+  // Title
+  if (extracted.title) {
+    lines.push(renderHeading("Page", options.color));
+    lines.push(`  ${style.dim("Title")}  ${extracted.title}`);
+    lines.push("");
+  }
+
+  // Key-values (most important info)
+  const kvEntries = Object.entries(extracted.keyValues);
+  if (kvEntries.length > 0) {
+    lines.push(renderHeading("Fields", options.color));
+    lines.push(...renderKeyValues(kvEntries, options.color, "  "));
+    lines.push("");
+  }
+
+  // Sections
+  for (const section of extracted.sections) {
+    const prefix = "  ".repeat(section.level - 1);
+    lines.push(`${prefix}${style.bold(section.heading)}`);
+    for (const content of section.content) {
+      lines.push(`${prefix}  ${style.dim(content)}`);
+    }
+    if (section.content.length > 0) lines.push("");
+  }
+
+  // Tables
+  for (const table of extracted.tables) {
+    const label = table.caption
+      ? `Table: ${table.caption}`
+      : "Table";
+    lines.push(
+      renderHeading(label, options.color, `${table.rows.length} rows`),
+    );
+    if (table.headers.length > 0 && table.rows.length > 0) {
+      lines.push(
+        ...renderTable(
+          table.rows as unknown[] as Array<Record<string, unknown>>,
+          options,
+        ),
+      );
+    } else if (table.rows.length > 0) {
+      // No headers - render as numbered items
+      for (let i = 0; i < Math.min(table.rows.length, options.maxRows); i++) {
+        const row = table.rows[i]!;
+        const values = Object.values(row).join(" | ");
+        lines.push(`  ${i + 1}. ${values}`);
+      }
+      if (table.rows.length > options.maxRows) {
+        lines.push(
+          `  ${style.dim(`\u2026 ${table.rows.length - options.maxRows} more`)}`,
+        );
+      }
+    }
+    lines.push("");
+  }
+
+  // Links
+  if (extracted.links.length > 0) {
+    lines.push(
+      renderHeading("Links", options.color, `${extracted.links.length}`),
+    );
+    const maxLinks = Math.min(extracted.links.length, 20);
+    for (let i = 0; i < maxLinks; i++) {
+      const link = extracted.links[i]!;
+      lines.push(`  ${style.cyan(link.text)}  ${style.dim(link.href)}`);
+    }
+    if (extracted.links.length > maxLinks) {
+      lines.push(
+        `  ${style.dim(`\u2026 ${extracted.links.length - maxLinks} more links`)}`,
+      );
+    }
+    lines.push("");
+  }
+
+  // Lists
+  for (const list of extracted.lists) {
+    const label = list.label ?? "List";
+    lines.push(
+      renderHeading(label, options.color, `${list.items.length}`),
+    );
+    for (const item of list.items.slice(0, options.maxRows)) {
+      lines.push(`  \u2022 ${item}`);
+    }
+    if (list.items.length > options.maxRows) {
+      lines.push(
+        `  ${style.dim(`\u2026 ${list.items.length - options.maxRows} more`)}`,
+      );
+    }
+    lines.push("");
+  }
+
+  // Metadata
+  const metaEntries = Object.entries(extracted.metadata).filter(
+    ([k]) => !k.startsWith("_"),
+  );
+  if (metaEntries.length > 0) {
+    lines.push(renderHeading("Metadata", options.color));
+    lines.push(...renderKeyValues(metaEntries, options.color, "  "));
+    lines.push("");
+  }
+
+  // Size info
+  lines.push(
+    style.dim(
+      `${(extracted.bytes / 1024).toFixed(1)} KB page  \u00B7 ${extracted.tables.length} tables  \u00B7 ${extracted.links.length} links  \u00B7 ${extracted.forms.length} forms`,
+    ),
+  );
+
+  return lines;
+}
+
+function renderHtmlStructure(
+  structure: Record<string, unknown>,
+  style: ReturnType<typeof uiStyle>,
+  options: Required<Pick<PrintOptions, "maxRows" | "color" | "width">>,
+): string[] {
+  const lines: string[] = [];
+  lines.push(
+    renderHeading("Page structure", options.color),
+    ...renderKeyValues(
+      [
+        ["headings", String(structure.headings ?? 0)],
+        ["tables", String(structure.tables ?? 0)],
+        ["tableRows", String(structure.tableRows ?? 0)],
+        ["links", String(structure.links ?? 0)],
+        ["forms", structure.forms ? JSON.stringify(structure.forms) : "0"],
+        ["response size", `${structure.bytes ?? 0} bytes`],
+      ] as Array<[string, unknown]>,
+      options.color,
+      "  ",
+    ),
+  );
+  return lines;
 }
 
 export function printReadRoute(
@@ -580,37 +739,42 @@ export function printReadRoute(
   const color = options.color ?? canColor();
   const style = uiStyle(color);
   const safe = redactValue(result.data);
-  const structure =
-    isRecord(safe) && safe.kind === "html-structure" ? safe : null;
   const state =
     result.status >= 200 && result.status < 300
-      ? style.green("● Available")
-      : style.yellow("● Unexpected response");
+      ? style.green("\u25CF Available")
+      : style.yellow("\u25CF Unexpected response");
   const lines = [
     renderHeading(title, color),
-    `${state}  ${style.dim(`${result.status} · ${result.durationMs} ms`)}`,
+    `${state}  ${style.dim(`${result.status} \u00B7 ${result.durationMs} ms`)}`,
     `${style.dim("Route")}  ${result.routeId}`,
   ];
 
-  if (structure) {
+  if (result._summary) {
+    lines.push(`${style.dim("Summary")} ${result._summary}`);
+  }
+
+  if (isRecord(safe) && safe.kind === "html-extracted") {
     lines.push(
       "",
-      renderHeading("Page structure", color),
-      ...renderKeyValues(
-        [
-          ["rows", structure.tableRows],
-          ["tables", structure.tables],
-          ["headings", structure.headings],
-          ["links", structure.links],
-          ["response size", `${structure.bytes} bytes`],
-        ],
-        color,
-        "  ",
+      ...renderHtmlExtracted(
+        safe as unknown as HtmlExtractedData,
+        style,
+        {
+          color,
+          width: terminalWidth(options.width),
+          maxRows: options.maxRows ?? 25,
+        },
       ),
+    );
+  } else if (isRecord(safe) && safe.kind === "html-structure") {
+    // Legacy fallback for any remaining old-format data
+    lines.push(
       "",
-      style.dim(
-        "Read-only check · page content and form values were not returned.",
-      ),
+      ...renderHtmlStructure(safe, style, {
+        color,
+        width: terminalWidth(options.width),
+        maxRows: options.maxRows ?? 25,
+      }),
     );
   } else {
     lines.push(
@@ -648,12 +812,21 @@ export function fail(error: unknown, json = false): never {
   const message = redactText(raw);
   const code = errorExitCode(message);
   if (json) {
-    process.stderr.write(`${JSON.stringify({ error: message })}\n`);
+    process.stderr.write(
+      `${JSON.stringify({ error: message, code })}\n`,
+    );
   } else {
     const style = uiStyle();
-    process.stderr.write(`${style.red("✕")} ${style.bold(message)}\n`);
+    process.stderr.write(
+      `${style.red("\u2715")} ${style.bold(message)}\n`,
+    );
     const hint = errorHint(message);
     if (hint) process.stderr.write(`${style.dim(`  ${hint}`)}\n`);
+    if (process.env.ISERV_DEBUG) {
+      process.stderr.write(
+        `${style.dim(`  Exit code: ${code}`)}\n`,
+      );
+    }
   }
   process.exitCode = code;
   throw new CommanderExit();
