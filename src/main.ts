@@ -4,6 +4,7 @@ import type { IServClient } from "@aplanatic/iserv-api";
 import { Command, CommanderError, Option } from "commander";
 import {
   CommanderExit,
+  emitHelpJson,
   fail,
   type PrintOptions,
   print,
@@ -13,13 +14,13 @@ import {
   printRoute,
   printRoutes,
   printRouteTree,
-  printSuccess,
+  printWriteSuccess,
   uiStyle,
 } from "./output.js";
 import { parseParameters } from "./parameters.js";
 
 const CLI_NAME = "@aplanatic/iserv-cli";
-const CLI_VERSION = "0.6.9";
+const CLI_VERSION = "0.6.10";
 
 const program = new Command();
 const helpStyle = () => uiStyle();
@@ -42,6 +43,10 @@ program
   .option("--json", "emit stable machine-readable JSON")
   .option("--debug", "write diagnostics and stack traces to stderr")
   .option("--verbose", "alias for --debug")
+  .option(
+    "--timeout <seconds>",
+    "HTTP request timeout in seconds (default: 30, or ISERV_TIMEOUT_MS)",
+  )
   .option("-V, --version", "output the version number")
   .addHelpText("after", () => {
     const h = helpStyle();
@@ -53,13 +58,28 @@ program
       emitVersion(Boolean(options.json));
       return;
     }
+    if (options.json) {
+      emitRootHelpJson(program);
+      return;
+    }
     program.outputHelp();
   });
 
 const jsonOutput = () => Boolean(program.opts().json);
 const applyGlobalFlags = (): void => {
-  const opts = program.opts<{ debug?: boolean; verbose?: boolean }>();
+  const opts = program.opts<{
+    debug?: boolean;
+    verbose?: boolean;
+    timeout?: string;
+  }>();
   if (opts.debug || opts.verbose) process.env.ISERV_DEBUG = "1";
+  if (opts.timeout !== undefined) {
+    const seconds = Number(opts.timeout);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      throw new Error("--timeout must be a positive number of seconds");
+    }
+    process.env.ISERV_TIMEOUT_MS = String(Math.round(seconds * 1000));
+  }
 };
 const emitVersion = (json: boolean): void => {
   if (json) {
@@ -69,6 +89,28 @@ const emitVersion = (json: boolean): void => {
     return;
   }
   process.stdout.write(`${CLI_VERSION}\n`);
+};
+const emitRootHelpJson = (cmd: Command): void => {
+  emitHelpJson({
+    name: CLI_NAME,
+    version: CLI_VERSION,
+    description: cmd.description(),
+    options: cmd.options.map((option) => ({
+      flags: option.flags,
+      description: option.description,
+    })),
+    commands: cmd.commands
+      .filter((sub) => !(sub as Command & { _hidden?: boolean })._hidden)
+      .map((sub) => ({
+        name: sub.name(),
+        description: sub.description(),
+        ...(sub.aliases().length > 0 ? { aliases: sub.aliases() } : {}),
+      })),
+  });
+};
+const collectOption = (value: string, previous: string[] = []): string[] => {
+  previous.push(value);
+  return previous;
 };
 const requireInteractiveTty = (action: string): void => {
   if (process.stdin.isTTY && process.stdout.isTTY) return;
@@ -188,7 +230,7 @@ const auth = program
 auth
   .command("login")
   .description("Connect an account and save its session in the system keychain")
-  .requiredOption("--url <url>", "custom IServ instance URL")
+  .option("--url <url>", "IServ instance URL (or set ISERV_HOST / ISERV_URL)")
   .option("--profile <name>", "profile name", "default")
   .option("--username <name>", "account name")
   .addOption(
@@ -212,10 +254,17 @@ auth
   .action(async (options) => {
     try {
       applyGlobalFlags();
+      const url =
+        options.url ?? process.env.ISERV_URL ?? process.env.ISERV_HOST;
+      if (!url) {
+        throw new Error(
+          "Missing instance URL. Pass --url <host>, or set ISERV_HOST / ISERV_URL.",
+        );
+      }
       const { normalizeInstanceUrl } = await api();
       // Validate before any interactive prompts so bad URLs fail cleanly in pipes.
       normalizeInstanceUrl(
-        options.url,
+        url,
         options.allowPrivateHost ? { allowPrivateHost: true } : {},
       );
       requireInteractiveTty("auth login");
@@ -226,7 +275,7 @@ auth
       if (options.browser) {
         await authBroker.loginBrowser({
           profile: options.profile,
-          url: options.url,
+          url,
           username,
           allowPrivateHost: options.allowPrivateHost,
         });
@@ -234,7 +283,7 @@ auth
         const secret = await password({ message: "Password", mask: "•" });
         await authBroker.login({
           profile: options.profile,
-          url: options.url,
+          url,
           username,
           password: secret,
           allowPrivateHost: options.allowPrivateHost,
@@ -242,7 +291,7 @@ auth
             password({ message: challenge.prompt, mask: "•" }),
         });
       }
-      printSuccess(
+      printWriteSuccess(
         "Connected",
         { profile: options.profile, username, authenticated: true },
         jsonOutput(),
@@ -276,7 +325,7 @@ auth
     try {
       requireWriteConfirm(options, "auth logout");
       await (await broker()).logout(options.profile);
-      printSuccess("Logged out", { loggedOut: true }, jsonOutput());
+      printWriteSuccess("Logged out", { loggedOut: true }, jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
     }
@@ -301,7 +350,7 @@ profile
     try {
       const { ProfileStore } = await api();
       await new ProfileStore().setActive(String(name));
-      printSuccess(
+      printWriteSuccess(
         "Active profile changed",
         { activeProfile: name },
         jsonOutput(),
@@ -320,7 +369,7 @@ profile
       const authBroker = await broker();
       await authBroker.logout(String(name));
       await authBroker.profiles.remove(String(name));
-      printSuccess("Profile removed", { removed: name }, jsonOutput());
+      printWriteSuccess("Profile removed", { removed: name }, jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
     }
@@ -660,7 +709,7 @@ notifications
     try {
       requireWriteConfirm(options, "notifications read-all");
       await (await restoreClient()).notifications.readAll();
-      printSuccess(
+      printWriteSuccess(
         "Notifications marked as read",
         { read: true },
         jsonOutput(),
@@ -810,7 +859,11 @@ calendar
           ...(options.location ? { location: options.location } : {}),
           ...(options.description ? { description: options.description } : {}),
         });
-        printSuccess("Event created", { created: true, result }, jsonOutput());
+        printWriteSuccess(
+          "Event created",
+          { created: true, result },
+          jsonOutput(),
+        );
       } catch (error) {
         fail(error, jsonOutput());
       }
@@ -846,7 +899,11 @@ calendar
           start: options.start,
           ...(options.series ? { series: true } : {}),
         });
-        printSuccess("Event deleted", { deleted: true, result }, jsonOutput());
+        printWriteSuccess(
+          "Event deleted",
+          { deleted: true, result },
+          jsonOutput(),
+        );
       } catch (error) {
         fail(error, jsonOutput());
       }
@@ -956,26 +1013,60 @@ mail
 mail
   .command("send")
   .description("Send an email (requires --confirm)")
-  .requiredOption("--to <address>")
+  .requiredOption(
+    "--to <address>",
+    "recipient (repeatable or comma-separated)",
+    collectOption,
+  )
+  .option(
+    "--cc <address>",
+    "CC recipient (repeatable or comma-separated)",
+    collectOption,
+  )
+  .option(
+    "--bcc <address>",
+    "BCC recipient (repeatable or comma-separated)",
+    collectOption,
+  )
   .requiredOption("--subject <subject>")
   .requiredOption("--body <body>")
   .option(
     "--confirm",
     "required acknowledgement that this writes to the server",
   )
-  .action(async (options) => {
-    try {
-      requireWriteConfirm(options, "mail send");
-      await (await restoreClient()).email.sendEmail({
-        to: options.to,
-        subject: options.subject,
-        body: options.body,
-      });
-      printSuccess("Email sent", { sent: true }, jsonOutput());
-    } catch (error) {
-      fail(error, jsonOutput());
-    }
-  });
+  .action(
+    async (options: {
+      to: string[];
+      cc?: string[];
+      bcc?: string[];
+      subject: string;
+      body: string;
+      confirm?: boolean;
+    }) => {
+      try {
+        requireWriteConfirm(options, "mail send");
+        await (await restoreClient()).email.sendEmail({
+          to: options.to,
+          ...(options.cc?.length ? { cc: options.cc } : {}),
+          ...(options.bcc?.length ? { bcc: options.bcc } : {}),
+          subject: options.subject,
+          body: options.body,
+        });
+        printWriteSuccess(
+          "Email sent",
+          {
+            sent: true,
+            to: options.to,
+            ...(options.cc?.length ? { cc: options.cc } : {}),
+            ...(options.bcc?.length ? { bcc: options.bcc } : {}),
+          },
+          jsonOutput(),
+        );
+      } catch (error) {
+        fail(error, jsonOutput());
+      }
+    },
+  );
 
 const messenger = program
   .command("messenger")
@@ -1070,9 +1161,9 @@ messenger
     }
   });
 messenger
-  .command("send <roomId>")
+  .command("send <room>")
   .description(
-    "Send a room message (requires --confirm). Example: iserv messenger send '!abc:host' --body 'hi'",
+    "Send a room message (requires --confirm). Room may be a Matrix id (!…) or unique room name.",
   )
   .option("--body <body>", "message body")
   .option("--text <text>", "alias for --body")
@@ -1082,7 +1173,7 @@ messenger
   )
   .action(
     async (
-      roomId,
+      room: string,
       options: { body?: string; text?: string; confirm?: boolean },
     ) => {
       try {
@@ -1090,13 +1181,14 @@ messenger
         const body = options.body ?? options.text;
         if (!body) {
           throw new Error(
-            "Provide --body <text> (or --text). Room id is the positional argument, not --room.",
+            "Provide --body <text> (or --text). Pass a room id (!…) or unique room name.",
           );
         }
-        const result = await (
-          await restoreMessengerClient()
-        ).messenger.sendMessage(roomId, body);
-        printSuccess("Message sent", result, jsonOutput());
+        const client = await restoreMessengerClient();
+        const result = room.startsWith("!")
+          ? await client.messenger.sendMessage(room, body)
+          : await client.messenger.sendMessageByName(room, body);
+        printWriteSuccess("Message sent", { sent: true, result }, jsonOutput());
       } catch (error) {
         fail(error, jsonOutput());
       }
@@ -1115,7 +1207,11 @@ messenger
       const result = await (
         await restoreMessengerClient()
       ).messenger.deleteMessage(roomId, eventId);
-      printSuccess("Message deleted", result, jsonOutput());
+      printWriteSuccess(
+        "Message deleted",
+        { deleted: true, result },
+        jsonOutput(),
+      );
     } catch (error) {
       fail(error, jsonOutput());
     }
@@ -1131,7 +1227,7 @@ messenger
     try {
       requireWriteConfirm(options, "messenger leave");
       await (await restoreMessengerClient()).messenger.leaveRoom(roomId);
-      printSuccess("Room left", { left: true, roomId }, jsonOutput());
+      printWriteSuccess("Room left", { left: true, roomId }, jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
     }
@@ -1155,7 +1251,11 @@ messenger
         const result = await (
           await restoreMessengerClient()
         ).messenger.reactToMessage(roomId, eventId, options.emoji);
-        printSuccess("Reaction sent", result, jsonOutput());
+        printWriteSuccess(
+          "Reaction sent",
+          { sent: true, result },
+          jsonOutput(),
+        );
       } catch (error) {
         fail(error, jsonOutput());
       }
@@ -1450,10 +1550,43 @@ program.hook("preAction", () => {
   applyGlobalFlags();
 });
 
+const patchHelpForJson = (cmd: Command): void => {
+  const original = cmd.outputHelp.bind(cmd);
+  cmd.outputHelp = ((...args: Parameters<Command["outputHelp"]>) => {
+    applyGlobalFlags();
+    if (jsonOutput()) {
+      const isRoot = cmd.name() === "iserv";
+      emitHelpJson({
+        name: isRoot ? CLI_NAME : `iserv ${cmd.name()}`,
+        version: CLI_VERSION,
+        description: cmd.description(),
+        options: (isRoot
+          ? cmd.options
+          : [...program.options, ...cmd.options]
+        ).map((option) => ({
+          flags: option.flags,
+          description: option.description,
+        })),
+        commands: cmd.commands
+          .filter((sub) => !(sub as Command & { _hidden?: boolean })._hidden)
+          .map((sub) => ({
+            name: sub.name(),
+            description: sub.description(),
+            ...(sub.aliases().length > 0 ? { aliases: sub.aliases() } : {}),
+          })),
+      });
+      return;
+    }
+    return original(...args);
+  }) as Command["outputHelp"];
+  for (const sub of cmd.commands) patchHelpForJson(sub);
+};
+patchHelpForJson(program);
+
 program.parseAsync(process.argv).catch((error) => {
   if (error instanceof CommanderExit) return;
   if (error instanceof CommanderError) {
-    // Help already printed by Commander; keep exit 0 for help.
+    // Help already printed by Commander (plaintext or JSON); keep exit 0 for help.
     process.exitCode =
       error.exitCode === 0 ||
       error.code === "commander.help" ||

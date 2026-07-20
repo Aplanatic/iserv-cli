@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.10
+
+- Global `--timeout <seconds>` (sets `ISERV_TIMEOUT_MS`; default 30s via API)
+- Debug stacks are path-redacted; suppressed entirely with `--json`
+- Clear HTTP 429 errors with limited retries (API)
+- Distinct `Aplanatic-IServ` User-Agent product token
+- `--json --help` emits structured JSON
+- Write results use `{ ok, action, … }` envelope
+- `ISERV_HOST` / `ISERV_URL` for login host
+- Mail `--to`/`--cc`/`--bcc` repeatable; messenger send accepts room name
+
 ## 0.6.9
 
 - `auth login` requires a TTY (no interactive prompts / ANSI in pipes)

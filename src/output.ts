@@ -588,6 +588,25 @@ export function printSuccess(
   process.stdout.write(`${lines.join("\n")}\n`);
 }
 
+/** Stable write-result envelope for --json and human output. */
+export function printWriteSuccess(
+  action: string,
+  details: Record<string, unknown> = {},
+  json = false,
+): void {
+  printSuccess(action, { ok: true, action, ...details }, json);
+}
+
+export function emitHelpJson(input: {
+  name: string;
+  version: string;
+  description: string;
+  options: Array<{ flags: string; description: string }>;
+  commands: Array<{ name: string; description: string; aliases?: string[] }>;
+}): void {
+  process.stdout.write(`${JSON.stringify(input)}\n`);
+}
+
 function isTimetableData(value: Record<string, unknown>): boolean {
   return (
     Array.isArray(value.rows) &&
@@ -905,10 +924,11 @@ export function fail(error: unknown, json = false): never {
     process.stderr.write(`${style.red("\u2715")} ${style.bold(message)}\n`);
     const hint = errorHint(message);
     if (hint) process.stderr.write(`${style.dim(`  ${hint}`)}\n`);
-    if (process.env.ISERV_DEBUG) {
+    // Never dump raw stacks in --json mode; always redact paths when debug is on.
+    if (process.env.ISERV_DEBUG && !json) {
       process.stderr.write(`${style.dim(`  Exit code: ${code}`)}\n`);
       if (error instanceof Error && error.stack) {
-        process.stderr.write(`${style.dim(error.stack)}\n`);
+        process.stderr.write(`${style.dim(redactText(error.stack))}\n`);
       }
     }
   }
