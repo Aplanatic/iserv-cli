@@ -638,6 +638,9 @@ function renderStructuredData(
   if (isModuleList(value)) {
     const lines: string[] = [];
     const items = value.items as unknown[];
+    if (value.title) {
+      lines.push(renderHeading(String(value.title), options.color));
+    }
     if (value.message && (value.empty || items.length === 0)) {
       lines.push(style.dim(String(value.message)));
       return lines;

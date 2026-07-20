@@ -23,7 +23,7 @@ const helpStyle = uiStyle();
 program
   .name("iserv")
   .description("A calm, secure command line for your IServ account")
-  .version("0.6.2")
+  .version("0.6.3")
   .showSuggestionAfterError()
   .showHelpAfterError("Run with --help to see available commands.")
   .configureHelp({
@@ -594,6 +594,24 @@ calendar
       empty: "No upcoming events.",
     }),
   );
+calendar
+  .command("holidays")
+  .description("Show school holiday countdown (Ferien & Feiertage)")
+  .option("--next", "list the next free days instead of season overview")
+  .option("--limit <number>", "maximum entries for --next", "12")
+  .action(async (options: { next?: boolean; limit: string }) => {
+    try {
+      const overview = await (await restoreClient()).calendar.getHolidays({
+        nextLimit: boundedLimit(options.limit, 50),
+      });
+      print(
+        { ...overview, mode: options.next ? "next" : "seasons" },
+        jsonOutput(),
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 calendar
   .command("search <query>")
   .description("Search visible events in an ISO date range")
