@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IServClient } from "@aplanatic/iserv-api";
-import { Command, Option } from "commander";
+import { Command, CommanderError, Option } from "commander";
 import {
   CommanderExit,
   fail,
@@ -23,9 +23,10 @@ const helpStyle = uiStyle();
 program
   .name("iserv")
   .description("A calm, secure command line for your IServ account")
-  .version("0.6.7")
+  .version("0.6.8")
   .showSuggestionAfterError()
   .showHelpAfterError("Run with --help to see available commands.")
+  .exitOverride()
   .configureHelp({
     sortOptions: true,
     sortSubcommands: true,
@@ -64,22 +65,32 @@ const boundedLimit = (value: string, maximum = 100): number => {
   }
   return parsed;
 };
-/** Writes require an explicit --confirm (or ISERV_ALLOW_WRITES=1). */
+/** Writes require an explicit --confirm. */
 const requireWriteConfirm = (
   options: { confirm?: boolean },
   action: string,
 ): void => {
-  if (options.confirm || process.env.ISERV_ALLOW_WRITES === "1") return;
-  throw new Error(
-    `Write blocked: ${action}. Pass --confirm to proceed, or set ISERV_ALLOW_WRITES=1.`,
-  );
+  if (options.confirm) return;
+  throw new Error(`Write blocked: ${action}. Pass --confirm to proceed.`);
+};
+const resolveSearchQuery = (
+  positional: string | undefined,
+  options: { query?: string },
+): string => {
+  const value = (options.query ?? positional ?? "").trim();
+  if (!value) {
+    throw new Error(
+      'Missing search query. For terms starting with "-", use: iserv search --query=--json (or: iserv search -- "--json").',
+    );
+  }
+  return value;
 };
 const registerUnavailableModule = (
   name: string,
   summary: string,
   reason: string,
 ) => {
-  const cmd = program.command(name).description(summary);
+  const cmd = program.command(name, { hidden: true }).description(summary);
   const failUnavailable = () => {
     fail(
       new Error(`${name} is not available in this CLI: ${reason}`),
@@ -216,10 +227,14 @@ auth
   });
 auth
   .command("logout")
-  .description("End the remote session and remove it from the keychain")
+  .description(
+    "End the remote session and remove it from the keychain (requires --confirm)",
+  )
   .option("--profile <name>")
-  .action(async (options: { profile?: string }) => {
+  .option("--confirm", "required acknowledgement that this ends the session")
+  .action(async (options: { profile?: string; confirm?: boolean }) => {
     try {
+      requireWriteConfirm(options, "auth logout");
       await (await broker()).logout(options.profile);
       printSuccess("Logged out", { loggedOut: true }, jsonOutput());
     } catch (error) {
@@ -257,9 +272,11 @@ profile
   });
 profile
   .command("remove <name>")
-  .description("Log out and remove a saved profile")
-  .action(async (name?: string) => {
+  .description("Log out and remove a saved profile (requires --confirm)")
+  .option("--confirm", "required acknowledgement that this removes the profile")
+  .action(async (name: string, options: { confirm?: boolean }) => {
     try {
+      requireWriteConfirm(options, "profile remove");
       const authBroker = await broker();
       await authBroker.logout(String(name));
       await authBroker.profiles.remove(String(name));
@@ -315,63 +332,79 @@ routes
   });
 
 program
-  .command("search <query>")
-  .description("Quickly search routes and visible users in one command")
+  .command("search")
+  .description(
+    'Quickly search routes and visible users. For queries starting with "-", use --query=... or --.',
+  )
+  .argument("[query]", "search text (optional when --query is set)")
+  .option(
+    "--query <query>",
+    'search text (preferred when the query starts with "-", e.g. --query=--json)',
+  )
   .addOption(
     new Option("--scope <scope>", "search all, routes, or users")
       .choices(["all", "routes", "users"])
       .default("all"),
   )
-  .option("--limit <number>", "maximum results per source", "10")
-  .action(async (query: string, options: { scope: string; limit: string }) => {
-    try {
-      if (!query.trim()) {
-        throw new Error("Search query must not be empty.");
-      }
-      const startedAt = performance.now();
-      const limit = boundedLimit(options.limit, 50);
-      const routePromise =
-        options.scope === "users"
-          ? Promise.resolve([])
-          : catalog().then(({ routeCatalog }) =>
-              routeCatalog.search(query, { limit }).map((route) => ({
-                id: route.id,
-                method: route.method,
-                module: route.module,
-                status: route.status,
-                summary: route.summary,
-              })),
-            );
-      const userPromise =
-        options.scope === "routes"
-          ? Promise.resolve({ users: [], warning: undefined })
-          : restoreClient()
-              .then((client) => client.users.searchAutocomplete(query, limit))
-              .then((users) => ({ users, warning: undefined }))
-              .catch(() => ({
+  .option("--limit <number>", "maximum results per source (1-50)", "10")
+  .action(
+    async (
+      positional: string | undefined,
+      options: { scope: string; limit: string; query?: string },
+    ) => {
+      try {
+        const query = resolveSearchQuery(positional, options);
+        const startedAt = performance.now();
+        const limit = boundedLimit(options.limit, 50);
+        const routePromise =
+          options.scope === "users"
+            ? Promise.resolve([])
+            : catalog().then(({ routeCatalog }) =>
+                routeCatalog.search(query, { limit }).map((route) => ({
+                  id: route.id,
+                  method: route.method,
+                  module: route.module,
+                  status: route.status,
+                  summary: route.summary,
+                })),
+              );
+        const userPromise =
+          options.scope === "routes"
+            ? Promise.resolve({
                 users: [],
-                warning: "User search is temporarily unavailable.",
-              }));
-      const [matchedRoutes, userResult] = await Promise.all([
-        routePromise,
-        userPromise,
-      ]);
-      print(
-        {
-          query,
-          scope: options.scope,
-          durationMs: Math.round(performance.now() - startedAt),
-          routes: matchedRoutes,
-          users: userResult.users,
-          ...(userResult.warning ? { warnings: [userResult.warning] } : {}),
-        },
-        jsonOutput(),
-        { title: `Search · ${query}`, maxRows: limit },
-      );
-    } catch (error) {
-      fail(error, jsonOutput());
-    }
-  });
+                warning: undefined as string | undefined,
+              })
+            : restoreClient()
+                .then((client) => client.users.searchAutocomplete(query, limit))
+                .then((users) => ({
+                  users,
+                  warning: undefined as string | undefined,
+                }))
+                .catch(() => ({
+                  users: [] as unknown[],
+                  warning: "User search is temporarily unavailable.",
+                }));
+        const [matchedRoutes, userResult] = await Promise.all([
+          routePromise,
+          userPromise,
+        ]);
+        print(
+          {
+            query,
+            scope: options.scope,
+            durationMs: Math.round(performance.now() - startedAt),
+            routes: matchedRoutes,
+            users: userResult.users,
+            ...(userResult.warning ? { warnings: [userResult.warning] } : {}),
+          },
+          jsonOutput(),
+          { title: `Search · ${query}`, maxRows: limit },
+        );
+      } catch (error) {
+        fail(error, jsonOutput());
+      }
+    },
+  );
 routes
   .command("show <routeId>")
   .description("Show the contract and provenance for one route")
@@ -550,12 +583,23 @@ const notifications = program
   .description("Read notification state and counters");
 notifications
   .command("list")
-  .description("List visible notifications")
+  .description(
+    "List SSE notification feed items (use badges for unread module counters)",
+  )
   .action(
-    withClient((client) => client.notifications.getAll(), {
-      title: "Notifications",
-      empty: "You have no notifications.",
-    }),
+    withClient(
+      async (client) => {
+        const data = await client.notifications.getAll();
+        return {
+          ...data,
+          note: "This is the notification feed. Unread module counters live under notifications badges.",
+        };
+      },
+      {
+        title: "Notifications",
+        empty: "You have no notifications in the feed.",
+      },
+    ),
   );
 notifications
   .command("badges")
@@ -774,6 +818,7 @@ const files = program
   .description("Inspect storage and file metadata");
 files
   .command("show")
+  .alias("overview")
   .description("Show the files module overview (not quota)")
   .action(() => readRoute("files.overview", "Files"));
 files
@@ -800,8 +845,14 @@ files
 const mail = program.command("mail").description("Read and send account email");
 mail
   .command("list")
-  .description("List bounded message metadata from the inbox")
-  .option("--limit <number>", "maximum messages", "20")
+  .description(
+    "List bounded message metadata from the inbox (pages past the ~200/server page; max 1000)",
+  )
+  .option(
+    "--limit <number>",
+    "maximum messages (1-1000; warns if fewer returned)",
+    "20",
+  )
   .action(async (options) => {
     try {
       print(
@@ -817,16 +868,28 @@ mail
   });
 mail
   .command("status")
-  .description("List recent inbox messages (mailbox status)")
-  .option("--limit <number>", "maximum messages", "10")
-  .action(async (options) => {
+  .description("Show inbox totals and unread count (not a full message list)")
+  .action(async () => {
     try {
+      const page = await (await restoreClient()).email.getEmails({ limit: 1 });
+      const unreadSample = await (await restoreClient()).email.getEmails({
+        limit: 50,
+      });
+      const unread = unreadSample.items.filter((item) => !item.read).length;
       print(
-        await (await restoreClient()).email.getEmails({
-          limit: boundedLimit(options.limit, 1000),
-        }),
+        {
+          title: "Mail status",
+          mailbox: "INBOX",
+          total: page.total,
+          all: page.all,
+          unreadAtLeast: unread,
+          note:
+            unreadSample.items.length < unreadSample.total
+              ? "unreadAtLeast is based on the newest 50 messages; use mail list for the full inbox."
+              : undefined,
+        },
         jsonOutput(),
-        { title: "Mail", empty: "No messages in this mailbox." },
+        { title: "Mail status" },
       );
     } catch (error) {
       fail(error, jsonOutput());
@@ -881,10 +944,41 @@ messenger
   .command("rooms")
   .description("List joined rooms")
   .action(
-    withMessengerClient((client) => client.messenger.getRooms(), {
-      title: "Messenger rooms",
-      empty: "No joined rooms.",
-    }),
+    withMessengerClient(
+      async (client) => {
+        const rooms = await client.messenger.getRooms();
+        return {
+          title: "Messenger rooms",
+          empty: rooms.length === 0,
+          items: rooms,
+          ...(rooms.length === 0 ? { message: "No joined rooms." } : {}),
+        };
+      },
+      {
+        title: "Messenger rooms",
+        empty: "No joined rooms.",
+      },
+    ),
+  );
+messenger
+  .command("sync")
+  .description("Run a one-shot Matrix sync and list joined rooms")
+  .action(
+    withMessengerClient(
+      async (client) => {
+        const rooms = await client.messenger.getRooms();
+        return {
+          title: "Messenger sync",
+          empty: rooms.length === 0,
+          items: rooms,
+          note: "One-shot /sync filtered to joined rooms (same source as messenger rooms).",
+        };
+      },
+      {
+        title: "Messenger sync",
+        empty: "No joined rooms.",
+      },
+    ),
   );
 messenger
   .command("contacts")
@@ -1229,6 +1323,7 @@ program
   .command("print")
   .description("Inspect printing without uploading or deleting files")
   .command("show")
+  .alias("quota")
   .description("Show print-job status")
   .action(
     withClient((client) => client.modules.listPrintJobs(), {
@@ -1306,6 +1401,22 @@ registerUnavailableModule(
   "no reliable same-origin read contract for this account/module",
 );
 
-program.parseAsync().catch((error) => {
-  if (!(error instanceof CommanderExit)) fail(error, jsonOutput());
+program.parseAsync(process.argv).catch((error) => {
+  if (error instanceof CommanderExit) return;
+  if (error instanceof CommanderError) {
+    // Help/version already printed by Commander; keep their exit codes (0).
+    process.exitCode =
+      error.exitCode === 0 ||
+      error.code === "commander.help" ||
+      error.code === "commander.helpDisplayed" ||
+      error.code === "commander.version"
+        ? 0
+        : (error.exitCode ?? 1);
+    return;
+  }
+  try {
+    fail(error, jsonOutput());
+  } catch (exitError) {
+    if (!(exitError instanceof CommanderExit)) throw exitError;
+  }
 });

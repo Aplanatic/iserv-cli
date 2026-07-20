@@ -287,7 +287,8 @@ export function print(
 ): void {
   const redacted = redactValue(value);
   if (json) {
-    process.stdout.write(`${JSON.stringify(redacted)}\n`);
+    // Project known shapes (account camelCase, mail bodies, etc.) for stable JSON too
+    process.stdout.write(`${JSON.stringify(presentForDisplay(redacted))}\n`);
     return;
   }
   process.stdout.write(formatHuman(redacted, options));
@@ -734,6 +735,18 @@ function renderStructuredData(
       items[0].body.trim().length > 0
     ) {
       const detail = items[0];
+      const articleTitle =
+        typeof detail.title === "string" && detail.title.trim()
+          ? String(detail.title)
+          : value.title
+            ? String(value.title)
+            : "News";
+      // Replace generic module heading with the real article title when available
+      if (lines.length && value.title && articleTitle !== String(value.title)) {
+        lines[0] = renderHeading(articleTitle, options.color);
+      } else if (!value.title) {
+        lines.push(renderHeading(articleTitle, options.color));
+      }
       if (typeof detail.meta === "string" && detail.meta.trim()) {
         lines.push(style.dim(String(detail.meta)));
       }
