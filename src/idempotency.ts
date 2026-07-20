@@ -19,6 +19,11 @@ async function readStore(directory: string): Promise<IdempotencyDocument> {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       return { version: 1, completed: {} };
     }
+    if (error instanceof SyntaxError) {
+      throw new Error(
+        "Config file corrupted (idempotency.json). Repair the JSON or delete the file and re-run.",
+      );
+    }
     throw error;
   }
 }

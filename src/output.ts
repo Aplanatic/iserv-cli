@@ -94,7 +94,19 @@ function displayValue(value: unknown): string {
     return String(value);
   if (Array.isArray(value))
     return value.length === 0 ? "None" : `${value.length} items`;
-  if (isRecord(value)) return `${Object.keys(value).length} fields`;
+  if (isRecord(value)) {
+    // Messenger lastMessage (and similar) — never String(object)
+    if (typeof value.body === "string" && value.body.trim()) {
+      return value.body.trim().slice(0, 60);
+    }
+    if (
+      typeof value.formatted_body === "string" &&
+      value.formatted_body.trim()
+    ) {
+      return value.formatted_body.trim().slice(0, 60);
+    }
+    return `${Object.keys(value).length} fields`;
+  }
   return String(value);
 }
 

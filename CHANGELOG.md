@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.15
+
+- Messenger rooms/sync/status flatten last message in the CLI (no `[object Object]`)
+- `messenger send` accepts optional room + local `--dry-run` / `--what-if`
+- Bash completion finds the command after global flags; re-source after upgrade
+- `config show` Env lists effective `ISERV_HOST` from config when unset in the environment
+- Corrupt config still reports `Config file corrupted (…)` (0.6.14)
+
 ## 0.6.14
 
 - Corrupt `config.json` / `.iserv.json` → clear "Config file corrupted" (no raw SyntaxError)

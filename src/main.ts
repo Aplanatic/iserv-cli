@@ -33,7 +33,7 @@ import {
 import { parseParameters } from "./parameters.js";
 
 const CLI_NAME = "@aplanatic/iserv-cli";
-const CLI_VERSION = "0.6.14";
+const CLI_VERSION = "0.6.15";
 const DEFAULT_LIMIT = String(CONFIG_DEFAULTS.defaultLimit);
 
 const program = new Command();
@@ -213,7 +213,9 @@ const boundedLimit = (value: string, maximum = 100): number => {
 /** Writes require an explicit --confirm (skipped for --dry-run / --what-if). */
 const isDryRun = (): boolean => {
   const opts = program.opts<{ dryRun?: boolean; whatIf?: boolean }>();
-  return Boolean(opts.dryRun || opts.whatIf);
+  return Boolean(
+    opts.dryRun || opts.whatIf || process.env.ISERV_DRY_RUN === "1",
+  );
 };
 const requireWriteConfirm = (
   options: { confirm?: boolean },
@@ -309,6 +311,49 @@ const withMessengerClient = (
   action: (client: IServClient) => Promise<unknown>,
   options: PrintOptions = {},
 ) => run(async () => action(await restoreMessengerClient()), options);
+
+/** Project messenger rooms to flat table rows (never nest lastMessage objects). */
+const formatMessengerRoomRows = (
+  rooms: Array<{
+    id?: string;
+    name?: string | null;
+    unreadCount?: number;
+    isDirect?: boolean;
+    lastMessage?: {
+      body?: unknown;
+      timestamp?: number;
+    } | null;
+  }>,
+): Array<Record<string, string>> =>
+  rooms.map((room) => {
+    const last = room.lastMessage;
+    let preview = "—";
+    if (last) {
+      const raw = last.body;
+      if (typeof raw === "string" && raw.trim())
+        preview = raw.trim().slice(0, 60);
+      else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        const nested = raw as Record<string, unknown>;
+        const text =
+          (typeof nested.body === "string" && nested.body) ||
+          (typeof nested.formatted_body === "string" &&
+            nested.formatted_body) ||
+          "";
+        if (text.trim()) preview = text.trim().slice(0, 60);
+      }
+    }
+    const when =
+      last && typeof last.timestamp === "number" && last.timestamp > 0
+        ? new Date(last.timestamp).toLocaleString()
+        : "—";
+    return {
+      name: String(room.name ?? room.id ?? "—"),
+      unread: String(room.unreadCount ?? 0),
+      direct: room.isDirect ? "yes" : "no",
+      last: preview,
+      when,
+    };
+  });
 
 async function readRoute(
   routeId: string,
@@ -1436,7 +1481,7 @@ messenger
         return {
           title: "Messenger rooms",
           empty: rooms.length === 0,
-          items: rooms,
+          items: formatMessengerRoomRows(rooms),
           ...(rooms.length === 0 ? { message: "No joined rooms." } : {}),
         };
       },
@@ -1456,8 +1501,9 @@ messenger
         return {
           title: "Messenger sync",
           empty: rooms.length === 0,
-          items: rooms,
+          items: formatMessengerRoomRows(rooms),
           note: "One-shot /sync filtered to joined rooms (same source as messenger rooms).",
+          ...(rooms.length === 0 ? { message: "No joined rooms." } : {}),
         };
       },
       {
@@ -1516,10 +1562,11 @@ messenger
     }
   });
 messenger
-  .command("send [room]")
+  .command("send")
   .description(
     "Send a room message (requires --confirm). Room may be a Matrix id (!…) or unique room name.",
   )
+  .argument("[room]", "Matrix room id (!…) or unique room name")
   .option("--body <body>", "message body")
   .option("--text <text>", "alias for --body")
   .option(
@@ -1530,6 +1577,11 @@ messenger
     "--confirm",
     "required acknowledgement that this writes to the server",
   )
+  .option(
+    "--dry-run",
+    "print intent without sending (same as global --dry-run)",
+  )
+  .option("--what-if", "alias for --dry-run")
   .action(
     async (
       room: string | undefined,
@@ -1538,16 +1590,27 @@ messenger
         text?: string;
         idempotencyKey?: string;
         confirm?: boolean;
+        dryRun?: boolean;
+        whatIf?: boolean;
       },
     ) => {
       try {
         const body = options.body ?? options.text;
-        if (isDryRun()) {
-          gateWrite(options, "messenger send", {
-            room: room ?? null,
-            body: body ?? null,
-            idempotencyKey: options.idempotencyKey?.trim() || null,
-          });
+        if (options.dryRun || options.whatIf) {
+          process.env.ISERV_DRY_RUN = "1";
+        }
+        if (isDryRun() || options.dryRun || options.whatIf) {
+          printWriteSuccess(
+            "Dry-run: messenger send",
+            {
+              dryRun: true,
+              action: "messenger send",
+              room: room ?? null,
+              body: body ?? null,
+              idempotencyKey: options.idempotencyKey?.trim() || null,
+            },
+            jsonOutput(),
+          );
           return;
         }
         if (!room) {
@@ -1744,10 +1807,21 @@ messenger
   .command("status")
   .description("List joined rooms (messenger status)")
   .action(
-    withMessengerClient((client) => client.messenger.getRooms(), {
-      title: "Messenger",
-      empty: "No joined rooms.",
-    }),
+    withMessengerClient(
+      async (client) => {
+        const rooms = await client.messenger.getRooms();
+        return {
+          title: "Messenger",
+          empty: rooms.length === 0,
+          items: formatMessengerRoomRows(rooms),
+          ...(rooms.length === 0 ? { message: "No joined rooms." } : {}),
+        };
+      },
+      {
+        title: "Messenger",
+        empty: "No joined rooms.",
+      },
+    ),
   );
 program
   .command("conference")
@@ -2132,14 +2206,25 @@ configCmd
             profile: runtimeConfig.profile ?? null,
           },
           env: {
-            ISERV_TIMEOUT_MS: process.env.ISERV_TIMEOUT_MS ?? null,
-            ISERV_HOST: process.env.ISERV_HOST ?? null,
+            ISERV_TIMEOUT_MS: process.env.ISERV_TIMEOUT_MS ?? String(timeoutMs),
+            ISERV_HOST: process.env.ISERV_HOST ?? host,
             ISERV_URL: process.env.ISERV_URL ?? null,
             ISERV_PORTABLE: process.env.ISERV_PORTABLE ?? null,
             ISERV_DEBUG: process.env.ISERV_DEBUG ?? null,
             ISERV_CONFIG_DIR: process.env.ISERV_CONFIG_DIR ?? null,
             ISERV_BROWSER_PATH: process.env.ISERV_BROWSER_PATH ?? null,
             ISERV_USER_AGENT: process.env.ISERV_USER_AGENT ?? null,
+          },
+          envNotes: {
+            ISERV_HOST:
+              process.env.ISERV_HOST || process.env.ISERV_URL
+                ? "from environment"
+                : host
+                  ? "from config (not an env var; shown for convenience)"
+                  : "unset",
+            ISERV_TIMEOUT_MS: process.env.ISERV_TIMEOUT_MS
+              ? "from environment"
+              : "from config/default (not an env var; shown for convenience)",
           },
         },
         jsonOutput(),
@@ -2219,19 +2304,28 @@ program
       const names = topLevel.join(" ");
       if (shell === "bash") {
         process.stdout.write(`# iserv bash completion
+# Re-source after upgrades: eval "$(iserv completion bash)"
 _iserv_completions() {
   local cur="\${COMP_WORDS[COMP_CWORD]}"
-  local cmd="\${COMP_WORDS[1]}"
-  case \${COMP_CWORD} in
-    1)
-      COMPREPLY=( $(compgen -W "${names} --help --json --debug --verbose --timeout --portable --dry-run --what-if --version" -- "$cur") )
-      ;;
-    2)
-      case "$cmd" in
+  local -a words=()
+  local i w
+  for ((i=1; i < COMP_CWORD; i++)); do
+    w="\${COMP_WORDS[i]}"
+    [[ "$w" == -* ]] && continue
+    words+=("$w")
+  done
+  local cmd="\${words[0]}"
+  local sub="\${words[1]}"
+  if [[ \${#words[@]} -eq 0 ]]; then
+    COMPREPLY=( $(compgen -W "${names} --help --json --debug --verbose --timeout --portable --dry-run --what-if --version" -- "$cur") )
+    return
+  fi
+  if [[ \${#words[@]} -eq 1 ]]; then
+    case "$cmd" in
 ${nestedBashCases}
-      esac
-      ;;
-  esac
+    esac
+    return
+  fi
 }
 complete -F _iserv_completions iserv
 `);
