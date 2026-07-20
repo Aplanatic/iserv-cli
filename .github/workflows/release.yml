@@ -12,18 +12,20 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           registry-url: https://npm.pkg.github.com
           scope: '@aplanatic'
-      - uses: Aplanatic/iserv-api/.github/actions/install-package@main
+      - uses: Aplanatic/iserv-api/.github/actions/install-package@6acb83b23dda483ecaa689bade0786990103b7a3
       - name: Check package version
         run: test "$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME#v}"
       - run: npm run check
       - name: Restore released API dependency
-        run: npm pkg set 'dependencies.@aplanatic/iserv-api=^1.5.1'
+        run: npm pkg set 'dependencies.@aplanatic/iserv-api=^1.7.3'
       - run: npm publish --access restricted
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
