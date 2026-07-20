@@ -153,12 +153,13 @@ function renderTable(
   );
   const preferred = keys.map((key) =>
     Math.min(
-    40,
-    Math.max(
-      humanize(key).length,
-      ...visibleRows.map((row) => oneLine(row[key]).length),
+      40,
+      Math.max(
+        humanize(key).length,
+        ...visibleRows.map((row) => oneLine(row[key]).length),
+      ),
     ),
-  ));
+  );
   const totalPreferred = preferred.reduce((sum, width) => sum + width, 0);
   const widths = preferred.map((width) =>
     totalPreferred <= available
@@ -250,6 +251,7 @@ export function formatHuman(
   const structured =
     isRecord(safe) &&
     (isTimetableData(safe) ||
+      isTimetableDay(safe) ||
       isModuleList(safe) ||
       (Array.isArray(safe.rows) &&
         (Boolean(safe.headers) || typeof safe.title === "string")));
@@ -265,9 +267,7 @@ export function formatHuman(
   ) {
     lines.push(style.dim(options.empty ?? "Nothing to show."));
   } else if (structured) {
-    lines.push(
-      ...renderStructuredData(safe, style, { color, width, maxRows }),
-    );
+    lines.push(...renderStructuredData(safe, style, { color, width, maxRows }));
   } else if (typeof safe === "string") {
     lines.push(safe);
   } else if (Array.isArray(safe)) {
@@ -354,11 +354,7 @@ export function printRoutes(
   }
   const color = options.color ?? canColor();
   const lines = [
-    renderHeading(
-      `Routes matching "${query}"`,
-      color,
-      `${routes.length}`,
-    ),
+    renderHeading(`Routes matching "${query}"`, color, `${routes.length}`),
   ];
   if (routes.length === 0) {
     lines.push(
@@ -497,8 +493,7 @@ export function printAuthStatus(
       ? style.yellow("\u25CF Session expired")
       : style.dim("\u25CB Not connected");
   const lines = [renderHeading("Session", color), state];
-  if (status.profile)
-    lines.push(`${style.dim("Profile")}  ${status.profile}`);
+  if (status.profile) lines.push(`${style.dim("Profile")}  ${status.profile}`);
   if (status.account?.displayName)
     lines.push(`${style.dim("Name")}     ${status.account.displayName}`);
   if (status.account?.username)
@@ -560,9 +555,7 @@ export function printAuthStatus(
     } else {
       lines.push(
         "",
-        style.dim(
-          "Write permissions are checked only when an action runs.",
-        ),
+        style.dim("Write permissions are checked only when an action runs."),
       );
     }
   }
@@ -595,7 +588,21 @@ export function printSuccess(
 }
 
 function isTimetableData(value: Record<string, unknown>): boolean {
-  return Array.isArray(value.rows) && Array.isArray(value.days) && Array.isArray(value.periods);
+  return (
+    Array.isArray(value.rows) &&
+    Array.isArray(value.days) &&
+    Array.isArray(value.periods)
+  );
+}
+
+function isTimetableDay(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.date === "string" &&
+    typeof value.dayName === "string" &&
+    Array.isArray(value.rows) &&
+    Array.isArray(value.lessons) &&
+    !Array.isArray(value.days)
+  );
 }
 
 function isModuleList(value: Record<string, unknown>): boolean {
@@ -632,7 +639,9 @@ function renderStructuredData(
       );
     }
     const rows = value.rows as Array<Record<string, unknown>>;
-    lines.push(...renderTable(rows, { ...options, maxRows: options.maxRows ?? 20 }));
+    lines.push(
+      ...renderTable(rows, { ...options, maxRows: options.maxRows ?? 20 }),
+    );
     const changes = Array.isArray(value.changes) ? value.changes : [];
     if (changes.length > 0) {
       lines.push(
@@ -641,7 +650,55 @@ function renderStructuredData(
         ...renderTable(normalizeRows(changes), options),
       );
     } else if (isRecord(value.visibility)) {
-      const note = value.visibility.note ? String(value.visibility.note) : undefined;
+      const note = value.visibility.note
+        ? String(value.visibility.note)
+        : undefined;
+      const url = value.visibility.substitutionsUrl
+        ? String(value.visibility.substitutionsUrl)
+        : undefined;
+      if (note || url) {
+        lines.push("");
+        if (note) lines.push(style.dim(note));
+        if (url) lines.push(style.dim(`Substitutions: ${url}`));
+      }
+    }
+    return lines;
+  }
+
+  // Timetable day (today / --date)
+  if (isTimetableDay(value)) {
+    const lines: string[] = [];
+    const detail = [
+      value.class ? String(value.class) : undefined,
+      `${String(value.dayName)} ${String(value.date)}`,
+      value.lastUpdated ? `updated ${value.lastUpdated}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(" \u00B7 ");
+    lines.push(
+      renderHeading("Timetable today", options.color, detail || undefined),
+    );
+    if (value.empty || (value.rows as unknown[]).length === 0) {
+      lines.push(style.dim(String(value.message ?? "No lessons today.")));
+      return lines;
+    }
+    lines.push(
+      ...renderTable(value.rows as Array<Record<string, unknown>>, {
+        ...options,
+        maxRows: options.maxRows ?? 20,
+      }),
+    );
+    const changes = Array.isArray(value.changes) ? value.changes : [];
+    if (changes.length > 0) {
+      lines.push(
+        "",
+        renderHeading("Changes", options.color, `${changes.length}`),
+        ...renderTable(normalizeRows(changes), options),
+      );
+    } else if (isRecord(value.visibility)) {
+      const note = value.visibility.note
+        ? String(value.visibility.note)
+        : undefined;
       const url = value.visibility.substitutionsUrl
         ? String(value.visibility.substitutionsUrl)
         : undefined;
@@ -669,6 +726,20 @@ function renderStructuredData(
       lines.push(style.dim(String(value.message ?? "Nothing to show.")));
       return lines;
     }
+    // Single news/article detail with a body — render as readable article
+    if (
+      items.length === 1 &&
+      isRecord(items[0]) &&
+      typeof items[0].body === "string" &&
+      items[0].body.trim().length > 0
+    ) {
+      const detail = items[0];
+      if (typeof detail.meta === "string" && detail.meta.trim()) {
+        lines.push(style.dim(String(detail.meta)));
+      }
+      lines.push("", String(detail.body));
+      return lines;
+    }
     // Avoid repeating the outer print() title when present
     lines.push(
       ...renderTable(normalizeRows(items), {
@@ -689,16 +760,16 @@ function renderStructuredData(
     (value.headers || value.title)
   ) {
     const lines: string[] = [];
-    if (value.title) lines.push(renderHeading(String(value.title), options.color));
-    lines.push(
-      ...renderTable(normalizeRows(value.rows as unknown[]), options),
-    );
+    if (value.title)
+      lines.push(renderHeading(String(value.title), options.color));
+    lines.push(...renderTable(normalizeRows(value.rows as unknown[]), options));
     return lines;
   }
 
   if (Array.isArray(value.items)) {
     const lines: string[] = [];
-    if (value.title) lines.push(renderHeading(String(value.title), options.color));
+    if (value.title)
+      lines.push(renderHeading(String(value.title), options.color));
     if (value.message && (value.items as unknown[]).length === 0) {
       lines.push(style.dim(String(value.message)));
       return lines;
@@ -711,9 +782,13 @@ function renderStructuredData(
 
   if (value.fields && isRecord(value.fields)) {
     const lines: string[] = [];
-    if (value.title) lines.push(renderHeading(String(value.title), options.color));
+    if (value.title)
+      lines.push(renderHeading(String(value.title), options.color));
     lines.push(
-      ...renderKeyValues(Object.entries(value.fields as Record<string, unknown>), options.color),
+      ...renderKeyValues(
+        Object.entries(value.fields as Record<string, unknown>),
+        options.color,
+      ),
     );
     return lines;
   }
@@ -799,7 +874,8 @@ export function fail(error: unknown, json = false): never {
     typeof (error as { status: unknown }).status === "number"
       ? (error as { status: number }).status
       : undefined;
-  const code = status && status >= 400 && status < 600 ? status : errorExitCode(message);
+  const code =
+    status && status >= 400 && status < 600 ? status : errorExitCode(message);
   if (json) {
     // Always emit one JSON object on stdout so --json pipelines stay valid
     process.stdout.write(
@@ -811,15 +887,11 @@ export function fail(error: unknown, json = false): never {
     );
   } else {
     const style = uiStyle();
-    process.stderr.write(
-      `${style.red("\u2715")} ${style.bold(message)}\n`,
-    );
+    process.stderr.write(`${style.red("\u2715")} ${style.bold(message)}\n`);
     const hint = errorHint(message);
     if (hint) process.stderr.write(`${style.dim(`  ${hint}`)}\n`);
     if (process.env.ISERV_DEBUG) {
-      process.stderr.write(
-        `${style.dim(`  Exit code: ${code}`)}\n`,
-      );
+      process.stderr.write(`${style.dim(`  Exit code: ${code}`)}\n`);
     }
   }
   process.exitCode = code >= 256 ? 1 : code;

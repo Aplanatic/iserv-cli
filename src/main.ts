@@ -23,7 +23,7 @@ const helpStyle = uiStyle();
 program
   .name("iserv")
   .description("A calm, secure command line for your IServ account")
-  .version("0.6.5")
+  .version("0.6.7")
   .showSuggestionAfterError()
   .showHelpAfterError("Run with --help to see available commands.")
   .configureHelp({
@@ -63,6 +63,42 @@ const boundedLimit = (value: string, maximum = 100): number => {
     throw new Error(`Limit must be an integer between 1 and ${maximum}`);
   }
   return parsed;
+};
+/** Writes require an explicit --confirm (or ISERV_ALLOW_WRITES=1). */
+const requireWriteConfirm = (
+  options: { confirm?: boolean },
+  action: string,
+): void => {
+  if (options.confirm || process.env.ISERV_ALLOW_WRITES === "1") return;
+  throw new Error(
+    `Write blocked: ${action}. Pass --confirm to proceed, or set ISERV_ALLOW_WRITES=1.`,
+  );
+};
+const registerUnavailableModule = (
+  name: string,
+  summary: string,
+  reason: string,
+) => {
+  const cmd = program.command(name).description(summary);
+  const failUnavailable = () => {
+    fail(
+      new Error(`${name} is not available in this CLI: ${reason}`),
+      jsonOutput(),
+    );
+  };
+  cmd
+    .command("show")
+    .description(`Unavailable — ${reason}`)
+    .action(failUnavailable);
+  cmd
+    .command("launch")
+    .description(`Unavailable — ${reason}`)
+    .action(failUnavailable);
+  cmd
+    .command("list")
+    .description(`Unavailable — ${reason}`)
+    .action(failUnavailable);
+  cmd.action(failUnavailable);
 };
 const run =
   <T extends unknown[]>(
@@ -531,9 +567,14 @@ notifications
   );
 notifications
   .command("read-all")
-  .description("Mark every visible notification as read")
-  .action(async () => {
+  .description("Mark every visible notification as read (requires --confirm)")
+  .option(
+    "--confirm",
+    "required acknowledgement that this writes to the server",
+  )
+  .action(async (options: { confirm?: boolean }) => {
     try {
+      requireWriteConfirm(options, "notifications read-all");
       await (await restoreClient()).notifications.readAll();
       printSuccess(
         "Notifications marked as read",
@@ -652,10 +693,89 @@ calendar
       fail(error, jsonOutput());
     }
   });
+calendar
+  .command("create")
+  .description("Create a calendar event (requires --confirm)")
+  .requiredOption("--subject <subject>")
+  .requiredOption("--calendar <id>", "calendar source id from calendar sources")
+  .requiredOption("--start <iso>")
+  .requiredOption("--end <iso>")
+  .option("--location <text>")
+  .option("--description <text>")
+  .option(
+    "--confirm",
+    "required acknowledgement that this writes to the server",
+  )
+  .action(
+    async (options: {
+      subject: string;
+      calendar: string;
+      start: string;
+      end: string;
+      location?: string;
+      description?: string;
+      confirm?: boolean;
+    }) => {
+      try {
+        requireWriteConfirm(options, "calendar create");
+        const result = await (await restoreClient()).calendar.createEvent({
+          subject: options.subject,
+          calendar: options.calendar,
+          start: options.start,
+          end: options.end,
+          ...(options.location ? { location: options.location } : {}),
+          ...(options.description ? { description: options.description } : {}),
+        });
+        printSuccess("Event created", { created: true, result }, jsonOutput());
+      } catch (error) {
+        fail(error, jsonOutput());
+      }
+    },
+  );
+calendar
+  .command("delete")
+  .description("Delete a calendar event (requires --confirm)")
+  .requiredOption("--uid <uid>")
+  .requiredOption("--hash <hash>")
+  .requiredOption("--calendar <id>")
+  .requiredOption("--start <iso>")
+  .option("--series", "delete the whole series")
+  .option(
+    "--confirm",
+    "required acknowledgement that this writes to the server",
+  )
+  .action(
+    async (options: {
+      uid: string;
+      hash: string;
+      calendar: string;
+      start: string;
+      series?: boolean;
+      confirm?: boolean;
+    }) => {
+      try {
+        requireWriteConfirm(options, "calendar delete");
+        const result = await (await restoreClient()).calendar.deleteEvent({
+          uid: options.uid,
+          hash: options.hash,
+          calendar: options.calendar,
+          start: options.start,
+          ...(options.series ? { series: true } : {}),
+        });
+        printSuccess("Event deleted", { deleted: true, result }, jsonOutput());
+      } catch (error) {
+        fail(error, jsonOutput());
+      }
+    },
+  );
 
 const files = program
   .command("files")
   .description("Inspect storage and file metadata");
+files
+  .command("show")
+  .description("Show the files module overview (not quota)")
+  .action(() => readRoute("files.overview", "Files"));
 files
   .command("quota")
   .description("Show storage use and quota")
@@ -676,12 +796,6 @@ files
       fail(error, jsonOutput());
     }
   });
-files
-  .command("show")
-  .description("Show storage quota overview")
-  .action(
-    withClient((client) => client.files.getDiskSpace(), { title: "Files" }),
-  );
 
 const mail = program.command("mail").description("Read and send account email");
 mail
@@ -738,12 +852,17 @@ mail
   });
 mail
   .command("send")
-  .description("Send an email immediately")
+  .description("Send an email (requires --confirm)")
   .requiredOption("--to <address>")
   .requiredOption("--subject <subject>")
   .requiredOption("--body <body>")
+  .option(
+    "--confirm",
+    "required acknowledgement that this writes to the server",
+  )
   .action(async (options) => {
     try {
+      requireWriteConfirm(options, "mail send");
       await (await restoreClient()).email.sendEmail({
         to: options.to,
         subject: options.subject,
@@ -818,23 +937,47 @@ messenger
   });
 messenger
   .command("send <roomId>")
-  .description("Send a room message immediately")
-  .requiredOption("--body <body>")
-  .action(async (roomId, options) => {
-    try {
-      const result = await (
-        await restoreMessengerClient()
-      ).messenger.sendMessage(roomId, options.body);
-      printSuccess("Message sent", result, jsonOutput());
-    } catch (error) {
-      fail(error, jsonOutput());
-    }
-  });
+  .description(
+    "Send a room message (requires --confirm). Example: iserv messenger send '!abc:host' --body 'hi'",
+  )
+  .option("--body <body>", "message body")
+  .option("--text <text>", "alias for --body")
+  .option(
+    "--confirm",
+    "required acknowledgement that this writes to the server",
+  )
+  .action(
+    async (
+      roomId,
+      options: { body?: string; text?: string; confirm?: boolean },
+    ) => {
+      try {
+        requireWriteConfirm(options, "messenger send");
+        const body = options.body ?? options.text;
+        if (!body) {
+          throw new Error(
+            "Provide --body <text> (or --text). Room id is the positional argument, not --room.",
+          );
+        }
+        const result = await (
+          await restoreMessengerClient()
+        ).messenger.sendMessage(roomId, body);
+        printSuccess("Message sent", result, jsonOutput());
+      } catch (error) {
+        fail(error, jsonOutput());
+      }
+    },
+  );
 messenger
   .command("delete <roomId> <eventId>")
-  .description("Delete a message immediately")
-  .action(async (roomId, eventId) => {
+  .description("Delete a message (requires --confirm)")
+  .option(
+    "--confirm",
+    "required acknowledgement that this writes to the server",
+  )
+  .action(async (roomId, eventId, options: { confirm?: boolean }) => {
     try {
+      requireWriteConfirm(options, "messenger delete");
       const result = await (
         await restoreMessengerClient()
       ).messenger.deleteMessage(roomId, eventId);
@@ -845,15 +988,45 @@ messenger
   });
 messenger
   .command("leave <roomId>")
-  .description("Leave a room immediately")
-  .action(async (roomId) => {
+  .description("Leave a room (requires --confirm)")
+  .option(
+    "--confirm",
+    "required acknowledgement that this writes to the server",
+  )
+  .action(async (roomId, options: { confirm?: boolean }) => {
     try {
+      requireWriteConfirm(options, "messenger leave");
       await (await restoreMessengerClient()).messenger.leaveRoom(roomId);
       printSuccess("Room left", { left: true, roomId }, jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
     }
   });
+messenger
+  .command("react <roomId> <eventId>")
+  .description("React to a message with an emoji (requires --confirm)")
+  .requiredOption("--emoji <emoji>", "reaction emoji, e.g. 👍")
+  .option(
+    "--confirm",
+    "required acknowledgement that this writes to the server",
+  )
+  .action(
+    async (
+      roomId: string,
+      eventId: string,
+      options: { emoji: string; confirm?: boolean },
+    ) => {
+      try {
+        requireWriteConfirm(options, "messenger react");
+        const result = await (
+          await restoreMessengerClient()
+        ).messenger.reactToMessage(roomId, eventId, options.emoji);
+        printSuccess("Reaction sent", result, jsonOutput());
+      } catch (error) {
+        fail(error, jsonOutput());
+      }
+    },
+  );
 messenger
   .command("members <roomId>")
   .description("List members of a joined room")
@@ -912,9 +1085,9 @@ exercises
   .action(async (options: { search?: string }) => {
     try {
       print(
-        await (await restoreClient()).modules.listExercises({
-          search: options.search,
-        }),
+        await (await restoreClient()).modules.listExercises(
+          options.search ? { search: options.search } : {},
+        ),
         jsonOutput(),
         { title: "Current exercises", empty: "No current exercises." },
       );
@@ -929,6 +1102,7 @@ exercises
     withClient((client) => client.modules.listPastExercises(), {
       title: "Past exercises",
       empty: "No past exercises.",
+      maxRows: 100,
     }),
   );
 
@@ -942,11 +1116,28 @@ timetable
   .action(async (options: { start?: string }) => {
     try {
       print(
-        await (await restoreClient()).timetable.getWeek({
-          startDate: options.start,
-        }),
+        await (await restoreClient()).timetable.getWeek(
+          options.start ? { startDate: options.start } : {},
+        ),
         jsonOutput(),
         { title: "Timetable", maxRows: 20 },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+timetable
+  .command("today")
+  .description("Show today's personal timetable (period list)")
+  .option("--date <date>", "day as DD.MM.YYYY or YYYY-MM-DD (default: today)")
+  .action(async (options: { date?: string }) => {
+    try {
+      print(
+        await (await restoreClient()).timetable.getToday(
+          options.date ? { date: options.date } : {},
+        ),
+        jsonOutput(),
+        { title: "Timetable today", maxRows: 20 },
       );
     } catch (error) {
       fail(error, jsonOutput());
@@ -987,7 +1178,7 @@ news
     try {
       print(
         await (await restoreClient()).modules.listNews({
-          search: options.search,
+          ...(options.search ? { search: options.search } : {}),
           limit: boundedLimit(options.limit, 100),
         }),
         jsonOutput(),
@@ -1098,6 +1289,22 @@ program
   .command("legal")
   .description("Check app legal information")
   .action(() => readRoute("app.legal", "App information"));
+
+registerUnavailableModule(
+  "education",
+  "Education connector (not available in this CLI)",
+  "the module leaves the IServ origin via a cross-origin redirect",
+);
+registerUnavailableModule(
+  "excalidraw",
+  "Excalidraw connector (not available in this CLI)",
+  "the module leaves the IServ origin via a cross-origin redirect",
+);
+registerUnavailableModule(
+  "pinboard",
+  "Pinboard module (not available in this CLI)",
+  "no reliable same-origin read contract for this account/module",
+);
 
 program.parseAsync().catch((error) => {
   if (!(error instanceof CommanderExit)) fail(error, jsonOutput());
