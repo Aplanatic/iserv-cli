@@ -20,10 +20,22 @@ iserv auth status
 
 The terminal flow securely prompts for the password and any detected one-time
 code. Use `--browser` when the instance requires WebAuthn, a password change,
-or an unfamiliar challenge. Secrets and session cookies are stored only in the
-operating system credential store.
+or an unfamiliar challenge (uses your installed Chrome/Edge/Chromium; no Playwright
+browser download). Secrets and session cookies are stored only in the operating system
+credential store.
 
-Run `iserv --help` and `iserv <command> --help` for the complete command tree.
+For non-interactive login (CI/scripts), pipe a password and keep the session off disk:
+
+```sh
+printf '%s' "$PASS" | iserv auth login --url iserv.example --username u --password-stdin --ephemeral
+```
+
+`--ephemeral` skips keychain persistence. `iserv auth logout --all` and
+`iserv profile remove --all` clear every stored profile.
+
+Set `ISERV_HOST` or `ISERV_URL` when you prefer environment-based host selection.
+Run `iserv --help` and `iserv <command> --help` for the complete command tree, including
+documented environment variables. `iserv help show [topic]` prints focused topic help.
 
 ## Fast search and agent workflows
 
@@ -51,6 +63,16 @@ iserv --json routes probe-many calendar.overview etherpad.list groupview.overvie
 catalogued session GET routes concurrently. It cannot execute writes or arbitrary URLs.
 Limits are validated before network work begins.
 
+## Writes and dry-run
+
+Mutating commands require an explicit `--confirm`. Preview intent without network side
+effects using global `--dry-run` (or `--what-if`):
+
+```sh
+iserv --dry-run mail send --to someone@example.com --subject Hi --body Test
+iserv mail send --to someone@example.com --subject Hi --body Test --confirm
+```
+
 ## Output
 
 Interactive output is designed for people: compact headings, aligned values,
@@ -72,7 +94,11 @@ Automation remains stable and compact. Put the global option before the command:
 ```sh
 iserv --json auth status
 iserv --json routes search calendar
+iserv --version --json
 ```
+
+Use `--debug` / `--verbose` for redacted diagnostics, `--timeout <seconds>` (capped at 300)
+for request budgets, and `--portable` for machine-friendly plain text.
 
 Verified normal-user module checks have short, memorable commands:
 
@@ -96,9 +122,21 @@ files, mail, messenger, videoconference health, app information, groups, and hel
 `iserv routes tree` for the complete, current route inventory rather than relying on a
 static command list.
 
-These commands issue only catalogued GET requests. Their default output confirms module
-availability and shows non-content-bearing page structure; it never prints authenticated
-HTML, form values, account identifiers, or hidden fields.
+Useful extras:
+
+```sh
+iserv files ls /                    # WebDAV listing (needs WebDAV + stored password)
+iserv mail send ... --attachment ~/doc.pdf --html-body '<p>Hi</p>' --confirm
+iserv messenger create-direct --user alice --confirm
+iserv doctor                        # local environment / session health
+iserv whatsnew                      # highlights since the last noted version
+iserv config                        # show resolved non-secret settings
+iserv completion bash               # shell completion script (also zsh)
+```
+
+These commands issue only catalogued GET requests where applicable. Default output for
+overview modules confirms availability and shows non-content-bearing page structure; it
+never prints authenticated HTML, form values, account identifiers, or hidden fields.
 
 `iserv auth status` shows the verified display name, username, installed modules,
 experimental/unavailable integrations, verified read-route counts, and the number of
