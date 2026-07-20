@@ -1,5 +1,6 @@
 import type { AuthStatus, RouteDefinition } from "@aplanatic/iserv-api";
 import { redactText, redactValue } from "@aplanatic/iserv-api/redaction";
+import { presentForDisplay } from "./present.js";
 
 export interface PrintOptions {
   title?: string;
@@ -240,7 +241,7 @@ export function formatHuman(
   value: unknown,
   options: PrintOptions = {},
 ): string {
-  const safe = redactValue(value);
+  const safe = presentForDisplay(redactValue(value));
   const color = options.color ?? canColor();
   const width = terminalWidth(options.width);
   const maxRows = options.maxRows ?? 25;
@@ -254,6 +255,16 @@ export function formatHuman(
     (Array.isArray(safe) && safe.length === 0)
   ) {
     lines.push(style.dim(options.empty ?? "Nothing to show."));
+  } else if (
+    isRecord(safe) &&
+    (isTimetableData(safe) ||
+      isModuleList(safe) ||
+      (Array.isArray(safe.rows) &&
+        (Boolean(safe.headers) || typeof safe.title === "string")))
+  ) {
+    lines.push(
+      ...renderStructuredData(safe, style, { color, width, maxRows }),
+    );
   } else if (typeof safe === "string") {
     lines.push(safe);
   } else if (Array.isArray(safe)) {
@@ -271,28 +282,12 @@ export function print(
   json = false,
   options: PrintOptions = {},
 ): void {
-  const safe = redactValue(value);
+  const redacted = redactValue(value);
   if (json) {
-    process.stdout.write(`${JSON.stringify(safe)}\n`);
+    process.stdout.write(`${JSON.stringify(redacted)}\n`);
     return;
   }
-  // Prefer structured renderers for timetable/module payloads
-  if (isRecord(safe) && (isTimetableData(safe) || isModuleList(safe) || Array.isArray(safe.rows) || Array.isArray(safe.items))) {
-    const color = options.color ?? canColor();
-    const style = uiStyle(color);
-    const lines: string[] = [];
-    if (options.title) lines.push(renderHeading(options.title, color));
-    lines.push(
-      ...renderStructuredData(safe, style, {
-        color,
-        width: terminalWidth(options.width),
-        maxRows: options.maxRows ?? 40,
-      }),
-    );
-    process.stdout.write(`${lines.join("\n").trimEnd()}\n`);
-    return;
-  }
-  process.stdout.write(formatHuman(safe, options));
+  process.stdout.write(formatHuman(redacted, options));
 }
 
 export function printRouteTree(
@@ -651,6 +646,7 @@ function renderStructuredData(
       lines.push(style.dim(String(value.message ?? "Nothing to show.")));
       return lines;
     }
+    // Avoid repeating the outer print() title when present
     lines.push(
       ...renderTable(normalizeRows(items), {
         ...options,
@@ -713,7 +709,6 @@ export function printReadRoute(
   options: PrintOptions = {},
 ): void {
   if (json) {
-    // For agents/scripts: emit the structured data payload directly
     print(
       {
         routeId: result.routeId,
@@ -728,7 +723,7 @@ export function printReadRoute(
   }
   const color = options.color ?? canColor();
   const style = uiStyle(color);
-  const safe = redactValue(result.data);
+  const safe = presentForDisplay(redactValue(result.data));
   const state =
     result.status >= 200 && result.status < 300
       ? style.green("\u25CF OK")
