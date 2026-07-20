@@ -862,6 +862,8 @@ function errorExitCode(message: string): number {
 }
 
 function errorHint(message: string): string | undefined {
+  if (/TTY required/i.test(message))
+    return "Use an interactive terminal, or correct the instance URL and retry.";
   if (/auth|login|session|credential/i.test(message))
     return "Run iserv auth login --url <your-instance> to reconnect.";
   if (/permission|authorized/i.test(message))
@@ -905,6 +907,9 @@ export function fail(error: unknown, json = false): never {
     if (hint) process.stderr.write(`${style.dim(`  ${hint}`)}\n`);
     if (process.env.ISERV_DEBUG) {
       process.stderr.write(`${style.dim(`  Exit code: ${code}`)}\n`);
+      if (error instanceof Error && error.stack) {
+        process.stderr.write(`${style.dim(error.stack)}\n`);
+      }
     }
   }
   process.exitCode = code >= 256 ? 1 : code;

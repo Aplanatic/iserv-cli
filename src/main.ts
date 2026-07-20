@@ -18,32 +18,64 @@ import {
 } from "./output.js";
 import { parseParameters } from "./parameters.js";
 
+const CLI_NAME = "@aplanatic/iserv-cli";
+const CLI_VERSION = "0.6.9";
+
 const program = new Command();
-const helpStyle = uiStyle();
+const helpStyle = () => uiStyle();
 program
   .name("iserv")
   .description("A calm, secure command line for your IServ account")
-  .version("0.6.8")
   .showSuggestionAfterError()
   .showHelpAfterError("Run with --help to see available commands.")
   .exitOverride()
   .configureHelp({
     sortOptions: true,
     sortSubcommands: true,
-    styleTitle: (value) => helpStyle.bold(value),
-    styleCommandText: (value) => helpStyle.cyan(value),
-    styleOptionText: (value) => helpStyle.cyan(value),
-    styleArgumentText: (value) => helpStyle.yellow(value),
-    styleSubcommandText: (value) => helpStyle.cyan(value),
+    styleTitle: (value) => helpStyle().bold(value),
+    styleCommandText: (value) => helpStyle().cyan(value),
+    styleOptionText: (value) => helpStyle().cyan(value),
+    styleArgumentText: (value) => helpStyle().yellow(value),
+    styleSubcommandText: (value) => helpStyle().cyan(value),
   });
 program
   .option("--json", "emit stable machine-readable JSON")
-  .addHelpText(
-    "after",
-    `\n${helpStyle.bold("Start here")}\n  ${helpStyle.cyan("iserv auth login --url <your-instance>")}\n  ${helpStyle.cyan("iserv auth status")}\n  ${helpStyle.cyan("iserv routes tree")}\n`,
-  );
+  .option("--debug", "write diagnostics and stack traces to stderr")
+  .option("--verbose", "alias for --debug")
+  .option("-V, --version", "output the version number")
+  .addHelpText("after", () => {
+    const h = helpStyle();
+    return `\n${h.bold("Start here")}\n  ${h.cyan("iserv auth login --url <your-instance>")}\n  ${h.cyan("iserv auth status")}\n  ${h.cyan("iserv routes tree")}\n`;
+  })
+  .action((options: { version?: boolean; json?: boolean }) => {
+    applyGlobalFlags();
+    if (options.version) {
+      emitVersion(Boolean(options.json));
+      return;
+    }
+    program.outputHelp();
+  });
 
 const jsonOutput = () => Boolean(program.opts().json);
+const applyGlobalFlags = (): void => {
+  const opts = program.opts<{ debug?: boolean; verbose?: boolean }>();
+  if (opts.debug || opts.verbose) process.env.ISERV_DEBUG = "1";
+};
+const emitVersion = (json: boolean): void => {
+  if (json) {
+    process.stdout.write(
+      `${JSON.stringify({ name: CLI_NAME, version: CLI_VERSION })}\n`,
+    );
+    return;
+  }
+  process.stdout.write(`${CLI_VERSION}\n`);
+};
+const requireInteractiveTty = (action: string): void => {
+  if (process.stdin.isTTY && process.stdout.isTTY) return;
+  throw new Error(
+    `TTY required for ${action}. Run this command in an interactive terminal (not a pipe).`,
+  );
+};
 let apiPromise: Promise<typeof import("@aplanatic/iserv-api")> | undefined;
 const api = () => (apiPromise ??= import("@aplanatic/iserv-api"));
 let catalogPromise:
@@ -173,12 +205,20 @@ auth
     "--allow-private-host",
     "allow an explicitly configured private-network host",
   )
-  .addHelpText(
-    "after",
-    `\n${helpStyle.bold("Examples")}\n  ${helpStyle.cyan("iserv auth login --url iserv.example")}\n  ${helpStyle.cyan("iserv auth login --url iserv.example --browser")}\n`,
-  )
+  .addHelpText("after", () => {
+    const h = helpStyle();
+    return `\n${h.bold("Examples")}\n  ${h.cyan("iserv auth login --url iserv.example")}\n  ${h.cyan("iserv auth login --url iserv.example --browser")}\n`;
+  })
   .action(async (options) => {
     try {
+      applyGlobalFlags();
+      const { normalizeInstanceUrl } = await api();
+      // Validate before any interactive prompts so bad URLs fail cleanly in pipes.
+      normalizeInstanceUrl(
+        options.url,
+        options.allowPrivateHost ? { allowPrivateHost: true } : {},
+      );
+      requireInteractiveTty("auth login");
       const { input, password } = await import("@inquirer/prompts");
       const username =
         options.username ?? (await input({ message: "Account name" }));
@@ -289,10 +329,10 @@ profile
 const routes = program
   .command("routes")
   .description("Inspect and safely probe the route catalog")
-  .addHelpText(
-    "after",
-    `\n${helpStyle.bold("Examples")}\n  ${helpStyle.cyan("iserv routes tree")}\n  ${helpStyle.cyan("iserv routes search calendar")}\n  ${helpStyle.cyan("iserv routes show calendar.upcoming")}\n`,
-  );
+  .addHelpText("after", () => {
+    const h = helpStyle();
+    return `\n${h.bold("Examples")}\n  ${h.cyan("iserv routes tree")}\n  ${h.cyan("iserv routes search calendar")}\n  ${h.cyan("iserv routes show calendar.upcoming")}\n`;
+  });
 routes
   .command("tree")
   .description("Browse every catalogued route by module")
@@ -489,9 +529,9 @@ routes
         client ? { client, assetsDirectory } : { assetsDirectory },
       );
       process.stdout.write(
-        `${helpStyle.green("●")} ${helpStyle.bold("Explorer ready")}\n` +
-          `  ${helpStyle.dim("URL")}  ${server.url}\n` +
-          `  ${helpStyle.dim("Stop")} Ctrl+C\n`,
+        `${helpStyle().green("●")} ${helpStyle().bold("Explorer ready")}\n` +
+          `  ${helpStyle().dim("URL")}  ${server.url}\n` +
+          `  ${helpStyle().dim("Stop")} Ctrl+C\n`,
       );
       await (await import("open")).default(server.url);
       await new Promise<void>((resolve) => process.once("SIGINT", resolve));
@@ -1206,13 +1246,18 @@ const timetable = program
 timetable
   .command("show")
   .description("Show this week's personal timetable as a grid")
-  .option("--start <date>", "week start as DD.MM.YYYY or YYYY-MM-DD")
-  .action(async (options: { start?: string }) => {
+  .option("--start <date>", "range start as DD.MM.YYYY or YYYY-MM-DD")
+  .option(
+    "--end <date>",
+    "range end as DD.MM.YYYY or YYYY-MM-DD (default: start week Fri)",
+  )
+  .action(async (options: { start?: string; end?: string }) => {
     try {
       print(
-        await (await restoreClient()).timetable.getWeek(
-          options.start ? { startDate: options.start } : {},
-        ),
+        await (await restoreClient()).timetable.getWeek({
+          ...(options.start ? { startDate: options.start } : {}),
+          ...(options.end ? { endDate: options.end } : {}),
+        }),
         jsonOutput(),
         { title: "Timetable", maxRows: 20 },
       );
@@ -1401,15 +1446,18 @@ registerUnavailableModule(
   "no reliable same-origin read contract for this account/module",
 );
 
+program.hook("preAction", () => {
+  applyGlobalFlags();
+});
+
 program.parseAsync(process.argv).catch((error) => {
   if (error instanceof CommanderExit) return;
   if (error instanceof CommanderError) {
-    // Help/version already printed by Commander; keep their exit codes (0).
+    // Help already printed by Commander; keep exit 0 for help.
     process.exitCode =
       error.exitCode === 0 ||
       error.code === "commander.help" ||
-      error.code === "commander.helpDisplayed" ||
-      error.code === "commander.version"
+      error.code === "commander.helpDisplayed"
         ? 0
         : (error.exitCode ?? 1);
     return;
