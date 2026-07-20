@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.11
+
+- File-lock + `.bak` backup for `profiles.json`
+- `--idempotency-key` for mail/messenger send (dedupe retries)
+- `routes serve --port` (still loopback + token auth)
+- Defaults standardized to `--limit 25`
+- `whatsnew`, `doctor`, `config`, `completion`
+- `--portable`, `.iserv.json` project config, mail `--offset`
+- Mail list documents ~200 server page size
+
 ## 0.6.10
 
 - Global `--timeout <seconds>` (sets `ISERV_TIMEOUT_MS`; default 30s via API)

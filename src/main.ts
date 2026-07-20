@@ -1,7 +1,20 @@
+import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IServClient } from "@aplanatic/iserv-api";
 import { Command, CommanderError, Option } from "commander";
+import {
+  type CliConfig,
+  CONFIG_DEFAULTS,
+  loadCliConfig,
+  loadProjectConfig,
+  mergeConfig,
+  saveCliConfig,
+} from "./config.js";
+import {
+  findCompletedIdempotency,
+  markIdempotencyCompleted,
+} from "./idempotency.js";
 import {
   CommanderExit,
   emitHelpJson,
@@ -20,7 +33,8 @@ import {
 import { parseParameters } from "./parameters.js";
 
 const CLI_NAME = "@aplanatic/iserv-cli";
-const CLI_VERSION = "0.6.10";
+const CLI_VERSION = "0.6.11";
+const DEFAULT_LIMIT = String(CONFIG_DEFAULTS.defaultLimit);
 
 const program = new Command();
 const helpStyle = () => uiStyle();
@@ -47,6 +61,10 @@ program
     "--timeout <seconds>",
     "HTTP request timeout in seconds (default: 30, or ISERV_TIMEOUT_MS)",
   )
+  .option(
+    "--portable",
+    "use ./.iserv in the current directory for config and profiles",
+  )
   .option("-V, --version", "output the version number")
   .addHelpText("after", () => {
     const h = helpStyle();
@@ -66,12 +84,23 @@ program
   });
 
 const jsonOutput = () => Boolean(program.opts().json);
+let runtimeConfig: CliConfig & {
+  timeoutSeconds: number;
+  defaultLimit: number;
+} = {
+  ...CONFIG_DEFAULTS,
+};
+let configDirectoryPromise: Promise<string> | undefined;
+let configReady: Promise<void> | undefined;
+
 const applyGlobalFlags = (): void => {
   const opts = program.opts<{
     debug?: boolean;
     verbose?: boolean;
     timeout?: string;
+    portable?: boolean;
   }>();
+  if (opts.portable) process.env.ISERV_PORTABLE = "1";
   if (opts.debug || opts.verbose) process.env.ISERV_DEBUG = "1";
   if (opts.timeout !== undefined) {
     const seconds = Number(opts.timeout);
@@ -81,6 +110,27 @@ const applyGlobalFlags = (): void => {
     process.env.ISERV_TIMEOUT_MS = String(Math.round(seconds * 1000));
   }
 };
+
+const configDirectory = () =>
+  (configDirectoryPromise ??= api().then(({ resolveConfigDirectory }) =>
+    resolveConfigDirectory(),
+  ));
+
+const ensureConfig = () =>
+  (configReady ??= (async () => {
+    applyGlobalFlags();
+    const directory = await configDirectory();
+    runtimeConfig = mergeConfig(
+      await loadCliConfig(directory),
+      await loadProjectConfig(),
+    );
+    if (!process.env.ISERV_TIMEOUT_MS && runtimeConfig.timeoutSeconds) {
+      process.env.ISERV_TIMEOUT_MS = String(
+        Math.round(runtimeConfig.timeoutSeconds * 1000),
+      );
+    }
+  })());
+
 const emitVersion = (json: boolean): void => {
   if (json) {
     process.stdout.write(
@@ -117,6 +167,22 @@ const requireInteractiveTty = (action: string): void => {
   throw new Error(
     `TTY required for ${action}. Run this command in an interactive terminal (not a pipe).`,
   );
+};
+const resolveIdempotencyKey = (provided?: string): string =>
+  provided?.trim() || crypto.randomUUID();
+const claimIdempotencyKey = async (
+  _action: string,
+  key: string,
+): Promise<"new" | "completed"> => {
+  const directory = await configDirectory();
+  const prior = await findCompletedIdempotency(directory, key);
+  return prior ? "completed" : "new";
+};
+const completeIdempotencyKey = async (
+  action: string,
+  key: string,
+): Promise<void> => {
+  await markIdempotencyCompleted(await configDirectory(), key, action);
 };
 let apiPromise: Promise<typeof import("@aplanatic/iserv-api")> | undefined;
 const api = () => (apiPromise ??= import("@aplanatic/iserv-api"));
@@ -253,12 +319,15 @@ auth
   })
   .action(async (options) => {
     try {
-      applyGlobalFlags();
+      await ensureConfig();
       const url =
-        options.url ?? process.env.ISERV_URL ?? process.env.ISERV_HOST;
+        options.url ??
+        process.env.ISERV_URL ??
+        process.env.ISERV_HOST ??
+        runtimeConfig.host;
       if (!url) {
         throw new Error(
-          "Missing instance URL. Pass --url <host>, or set ISERV_HOST / ISERV_URL.",
+          "Missing instance URL. Pass --url <host>, set ISERV_HOST / ISERV_URL, or add host to .iserv.json / config.",
         );
       }
       const { normalizeInstanceUrl } = await api();
@@ -368,8 +437,15 @@ profile
       requireWriteConfirm(options, "profile remove");
       const authBroker = await broker();
       await authBroker.logout(String(name));
-      await authBroker.profiles.remove(String(name));
-      printWriteSuccess("Profile removed", { removed: name }, jsonOutput());
+      const removed = await authBroker.profiles.remove(String(name));
+      printWriteSuccess(
+        "Profile removed",
+        {
+          removed: name,
+          ...(removed.backupPath ? { backupPath: removed.backupPath } : {}),
+        },
+        jsonOutput(),
+      );
     } catch (error) {
       fail(error, jsonOutput());
     }
@@ -435,7 +511,11 @@ program
       .choices(["all", "routes", "users"])
       .default("all"),
   )
-  .option("--limit <number>", "maximum results per source (1-50)", "10")
+  .option(
+    "--limit <number>",
+    "maximum results per source (1-50)",
+    DEFAULT_LIMIT,
+  )
   .action(
     async (
       positional: string | undefined,
@@ -557,9 +637,14 @@ routes
   });
 routes
   .command("serve")
-  .description("Open the local interactive route explorer")
-  .action(async () => {
+  .description(
+    "Open the local interactive route explorer (loopback-only, token auth)",
+  )
+  .option("--port <number>", "bind port (default: ephemeral)")
+  .option("--no-open", "do not open a browser")
+  .action(async (options: { port?: string; open?: boolean }) => {
     try {
+      await ensureConfig();
       const apiEntry = fileURLToPath(
         import.meta.resolve("@aplanatic/iserv-api"),
       );
@@ -574,15 +659,28 @@ routes
       } catch {
         /* Documentation-only mode. */
       }
-      const server = await (await api()).startExplorerServer(
-        client ? { client, assetsDirectory } : { assetsDirectory },
-      );
+      const port =
+        options.port !== undefined ? Number(options.port) : undefined;
+      if (
+        port !== undefined &&
+        (!Number.isInteger(port) || port < 1 || port > 65535)
+      ) {
+        throw new Error("--port must be an integer between 1 and 65535");
+      }
+      const server = await (await api()).startExplorerServer({
+        ...(client ? { client } : {}),
+        assetsDirectory,
+        ...(port !== undefined ? { port } : {}),
+      });
       process.stdout.write(
         `${helpStyle().green("●")} ${helpStyle().bold("Explorer ready")}\n` +
           `  ${helpStyle().dim("URL")}  ${server.url}\n` +
+          `  ${helpStyle().dim("Bind")} 127.0.0.1 (loopback only)\n` +
           `  ${helpStyle().dim("Stop")} Ctrl+C\n`,
       );
-      await (await import("open")).default(server.url);
+      if (options.open !== false) {
+        await (await import("open")).default(server.url);
+      }
       await new Promise<void>((resolve) => process.once("SIGINT", resolve));
       await server.close();
     } catch (error) {
@@ -629,7 +727,7 @@ const users = program
 users
   .command("search <query>")
   .description("Search the address book")
-  .option("--limit <number>", "maximum results", "20")
+  .option("--limit <number>", "maximum results", DEFAULT_LIMIT)
   .action(async (query, options) => {
     try {
       print(
@@ -772,7 +870,7 @@ calendar
   .command("holidays")
   .description("Show school holiday countdown (Ferien & Feiertage)")
   .option("--next", "list the next free days instead of season overview")
-  .option("--limit <number>", "maximum entries for --next", "12")
+  .option("--limit <number>", "maximum entries for --next", DEFAULT_LIMIT)
   .action(async (options: { next?: boolean; limit: string }) => {
     try {
       const overview = await (await restoreClient()).calendar.getHolidays({
@@ -943,18 +1041,25 @@ const mail = program.command("mail").description("Read and send account email");
 mail
   .command("list")
   .description(
-    "List bounded message metadata from the inbox (pages past the ~200/server page; max 1000)",
+    "List inbox metadata (pages ~200/server; use --offset to continue; max 1000)",
   )
   .option(
     "--limit <number>",
-    "maximum messages (1-1000; warns if fewer returned)",
-    "20",
+    "maximum messages (1-1000; server pages ~200)",
+    DEFAULT_LIMIT,
   )
-  .action(async (options) => {
+  .option("--offset <number>", "skip this many newest messages", "0")
+  .action(async (options: { limit: string; offset: string }) => {
     try {
+      await ensureConfig();
+      const offset = Number(options.offset);
+      if (!Number.isInteger(offset) || offset < 0) {
+        throw new Error("--offset must be a non-negative integer");
+      }
       print(
         await (await restoreClient()).email.getEmails({
           limit: boundedLimit(options.limit, 1000),
+          offset,
         }),
         jsonOutput(),
         { title: "Inbox", empty: "No messages in this mailbox." },
@@ -1031,6 +1136,10 @@ mail
   .requiredOption("--subject <subject>")
   .requiredOption("--body <body>")
   .option(
+    "--idempotency-key <key>",
+    "stable key so retries do not double-send (auto-generated if omitted)",
+  )
+  .option(
     "--confirm",
     "required acknowledgement that this writes to the server",
   )
@@ -1041,21 +1150,38 @@ mail
       bcc?: string[];
       subject: string;
       body: string;
+      idempotencyKey?: string;
       confirm?: boolean;
     }) => {
       try {
         requireWriteConfirm(options, "mail send");
+        await ensureConfig();
+        const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey);
+        if (
+          (await claimIdempotencyKey("mail send", idempotencyKey)) ===
+          "completed"
+        ) {
+          printWriteSuccess(
+            "Email already sent",
+            { sent: true, deduped: true, idempotencyKey },
+            jsonOutput(),
+          );
+          return;
+        }
         await (await restoreClient()).email.sendEmail({
           to: options.to,
           ...(options.cc?.length ? { cc: options.cc } : {}),
           ...(options.bcc?.length ? { bcc: options.bcc } : {}),
           subject: options.subject,
           body: options.body,
+          idempotencyKey,
         });
+        await completeIdempotencyKey("mail send", idempotencyKey);
         printWriteSuccess(
           "Email sent",
           {
             sent: true,
+            idempotencyKey,
             to: options.to,
             ...(options.cc?.length ? { cc: options.cc } : {}),
             ...(options.bcc?.length ? { bcc: options.bcc } : {}),
@@ -1146,7 +1272,7 @@ messenger
 messenger
   .command("messages <roomId>")
   .description("List a bounded page of room messages")
-  .option("--limit <number>", "maximum messages", "20")
+  .option("--limit <number>", "maximum messages", DEFAULT_LIMIT)
   .action(async (roomId, options) => {
     try {
       print(
@@ -1168,27 +1294,58 @@ messenger
   .option("--body <body>", "message body")
   .option("--text <text>", "alias for --body")
   .option(
+    "--idempotency-key <key>",
+    "Matrix txn id so retries do not double-send (auto-generated if omitted)",
+  )
+  .option(
     "--confirm",
     "required acknowledgement that this writes to the server",
   )
   .action(
     async (
       room: string,
-      options: { body?: string; text?: string; confirm?: boolean },
+      options: {
+        body?: string;
+        text?: string;
+        idempotencyKey?: string;
+        confirm?: boolean;
+      },
     ) => {
       try {
         requireWriteConfirm(options, "messenger send");
+        await ensureConfig();
         const body = options.body ?? options.text;
         if (!body) {
           throw new Error(
             "Provide --body <text> (or --text). Pass a room id (!…) or unique room name.",
           );
         }
+        const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey);
+        if (
+          (await claimIdempotencyKey("messenger send", idempotencyKey)) ===
+          "completed"
+        ) {
+          printWriteSuccess(
+            "Message already sent",
+            { sent: true, deduped: true, idempotencyKey },
+            jsonOutput(),
+          );
+          return;
+        }
         const client = await restoreMessengerClient();
         const result = room.startsWith("!")
-          ? await client.messenger.sendMessage(room, body)
-          : await client.messenger.sendMessageByName(room, body);
-        printWriteSuccess("Message sent", { sent: true, result }, jsonOutput());
+          ? await client.messenger.sendMessage(room, body, idempotencyKey)
+          : await client.messenger.sendMessageByName(
+              room,
+              body,
+              idempotencyKey,
+            );
+        await completeIdempotencyKey("messenger send", idempotencyKey);
+        printWriteSuccess(
+          "Message sent",
+          { sent: true, idempotencyKey, result },
+          jsonOutput(),
+        );
       } catch (error) {
         fail(error, jsonOutput());
       }
@@ -1530,6 +1687,231 @@ program
   .description("Check app legal information")
   .action(() => readRoute("app.legal", "App information"));
 
+program
+  .command("whatsnew")
+  .description("Show recent CLI changelog entries")
+  .option("--limit <number>", "how many sections to show", "3")
+  .action(async (options: { limit: string }) => {
+    try {
+      const changelogPath = join(
+        dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "CHANGELOG.md",
+      );
+      const text = await readFile(changelogPath, "utf8");
+      const limit = boundedLimit(options.limit, 20);
+      const sections = text
+        .split(/\n(?=## )/)
+        .filter((section) => section.startsWith("## "));
+      const selected = sections.slice(0, limit).join("\n").trim();
+      if (jsonOutput()) {
+        print(
+          {
+            version: CLI_VERSION,
+            entries: sections.slice(0, limit).map((section) => {
+              const [title, ...rest] = section.split("\n");
+              return {
+                heading: (title ?? "").replace(/^##\s*/, "").trim(),
+                body: rest.join("\n").trim(),
+              };
+            }),
+          },
+          true,
+        );
+        return;
+      }
+      process.stdout.write(`${selected}\n`);
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+
+program
+  .command("doctor")
+  .description("Diagnose config, auth, and basic connectivity")
+  .action(async () => {
+    try {
+      await ensureConfig();
+      const directory = await configDirectory();
+      const { ProfileStore } = await api();
+      const store = new ProfileStore(directory);
+      const profiles = await store.read();
+      const checks: Array<Record<string, unknown>> = [
+        {
+          check: "configDirectory",
+          ok: true,
+          path: directory,
+          portable: process.env.ISERV_PORTABLE === "1",
+        },
+        {
+          check: "timeout",
+          ok: true,
+          timeoutMs: Number(process.env.ISERV_TIMEOUT_MS ?? 30_000),
+        },
+        {
+          check: "defaultLimit",
+          ok: true,
+          defaultLimit: runtimeConfig.defaultLimit,
+        },
+        {
+          check: "profiles",
+          ok: true,
+          count: profiles.profiles.length,
+          activeProfile: profiles.activeProfile,
+        },
+      ];
+      try {
+        const status = await (await broker()).status();
+        checks.push({
+          check: "auth",
+          ok: status.authenticated,
+          profile: status.profile,
+          authenticated: status.authenticated,
+          capabilitiesVerified: status.capabilitiesVerified ?? false,
+        });
+      } catch (error) {
+        checks.push({
+          check: "auth",
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      const catalogSize = (await catalog()).routeCatalog.routes.length;
+      const cliCommands = program.commands.filter(
+        (sub) => !(sub as Command & { _hidden?: boolean })._hidden,
+      ).length;
+      checks.push({
+        check: "catalogCoverage",
+        ok: true,
+        routes: catalogSize,
+        topLevelCommands: cliCommands,
+        note: "Many routes are reachable via `iserv routes probe` without a dedicated wrapper.",
+      });
+      print(
+        {
+          title: "Doctor",
+          version: CLI_VERSION,
+          ok: checks.every((item) => item.ok !== false),
+          checks,
+        },
+        jsonOutput(),
+        { title: "Doctor" },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+
+const configCmd = program
+  .command("config")
+  .description("Show or set local CLI defaults (timeout, limit, host)");
+configCmd
+  .command("show")
+  .description("Show merged config (file + .iserv.json + defaults)")
+  .action(async () => {
+    try {
+      await ensureConfig();
+      print(
+        {
+          directory: await configDirectory(),
+          config: runtimeConfig,
+          env: {
+            ISERV_TIMEOUT_MS: process.env.ISERV_TIMEOUT_MS ?? null,
+            ISERV_HOST: process.env.ISERV_HOST ?? null,
+            ISERV_PORTABLE: process.env.ISERV_PORTABLE ?? null,
+          },
+        },
+        jsonOutput(),
+        { title: "Config" },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+configCmd
+  .command("set <assignment>")
+  .description("Set a config value, e.g. timeoutSeconds=60 or defaultLimit=25")
+  .action(async (assignment: string) => {
+    try {
+      await ensureConfig();
+      const match = assignment.match(
+        /^(timeoutSeconds|defaultLimit|host|profile)=(.*)$/,
+      );
+      if (!match) {
+        throw new Error(
+          "Use timeoutSeconds=<n>, defaultLimit=<n>, host=<hostname>, or profile=<name>",
+        );
+      }
+      const [, key, raw = ""] = match;
+      const directory = await configDirectory();
+      const current = await loadCliConfig(directory);
+      if (key === "timeoutSeconds" || key === "defaultLimit") {
+        const value = Number(raw);
+        if (!Number.isInteger(value) || value < 1) {
+          throw new Error(`${key} must be a positive integer`);
+        }
+        current[key] = value;
+      } else if (key === "host" || key === "profile") {
+        current[key] = raw;
+      }
+      const path = await saveCliConfig(directory, current);
+      runtimeConfig = mergeConfig(current, await loadProjectConfig());
+      printWriteSuccess(
+        "Config updated",
+        { path, config: current },
+        jsonOutput(),
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+
+program
+  .command("completion <shell>")
+  .description("Print a bash or zsh completion script")
+  .action((shell: string) => {
+    try {
+      const names = program.commands
+        .filter((sub) => !(sub as Command & { _hidden?: boolean })._hidden)
+        .map((sub) => sub.name())
+        .sort()
+        .join(" ");
+      if (shell === "bash") {
+        process.stdout.write(`# iserv bash completion
+_iserv_completions() {
+  local cur="\${COMP_WORDS[COMP_CWORD]}"
+  if [[ \${COMP_CWORD} -eq 1 ]]; then
+    COMPREPLY=( $(compgen -W "${names} --help --json --debug --verbose --timeout --portable --version" -- "$cur") )
+  fi
+}
+complete -F _iserv_completions iserv
+`);
+        return;
+      }
+      if (shell === "zsh") {
+        process.stdout.write(`# iserv zsh completion
+#compdef iserv
+_iserv() {
+  local -a commands
+  commands=(${names
+    .split(" ")
+    .map((name) => `${name}:'iserv ${name}'`)
+    .join(" ")})
+  _arguments '1:command:->cmds' '*::arg:->args'
+  case $state in
+    cmds) _describe 'command' commands ;;
+  esac
+}
+compdef _iserv iserv
+`);
+        return;
+      }
+      throw new Error("Supported shells: bash, zsh");
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+
 registerUnavailableModule(
   "education",
   "Education connector (not available in this CLI)",
@@ -1546,8 +1928,9 @@ registerUnavailableModule(
   "no reliable same-origin read contract for this account/module",
 );
 
-program.hook("preAction", () => {
+program.hook("preAction", async () => {
   applyGlobalFlags();
+  await ensureConfig();
 });
 
 const patchHelpForJson = (cmd: Command): void => {
