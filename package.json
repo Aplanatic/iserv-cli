@@ -27,7 +27,7 @@
   "dependencies": {
     "@aplanatic/iserv-api": "^1.8.14",
     "@inquirer/prompts": "^7.8.6",
-    "commander": "^14.0.2",
+    "commander": "^15.0.0",
     "open": "^11.0.0"
   },
   "devDependencies": {
