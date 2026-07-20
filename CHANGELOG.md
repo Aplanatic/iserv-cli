@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.16
+
+- `files ls --json` returns `{ path, items: [...] }` (not a bare array)
+- `help show [topic]` shows CLI help for a command (e.g. `help show routes`)
+- Cap `timeoutSeconds` / `--timeout` at 300 seconds
+
 ## 0.6.15
 
 - Messenger rooms/sync/status flatten last message in the CLI (no `[object Object]`)

@@ -33,8 +33,9 @@ import {
 import { parseParameters } from "./parameters.js";
 
 const CLI_NAME = "@aplanatic/iserv-cli";
-const CLI_VERSION = "0.6.15";
+const CLI_VERSION = "0.6.16";
 const DEFAULT_LIMIT = String(CONFIG_DEFAULTS.defaultLimit);
+const MAX_TIMEOUT_SECONDS = 300;
 
 const program = new Command();
 const helpStyle = () => uiStyle();
@@ -109,8 +110,14 @@ const applyGlobalFlags = (): void => {
   if (opts.debug || opts.verbose) process.env.ISERV_DEBUG = "1";
   if (opts.timeout !== undefined) {
     const seconds = Number(opts.timeout);
-    if (!Number.isFinite(seconds) || seconds <= 0) {
-      throw new Error("--timeout must be a positive number of seconds");
+    if (
+      !Number.isFinite(seconds) ||
+      seconds <= 0 ||
+      seconds > MAX_TIMEOUT_SECONDS
+    ) {
+      throw new Error(
+        `--timeout must be between 1 and ${MAX_TIMEOUT_SECONDS} seconds`,
+      );
     }
     process.env.ISERV_TIMEOUT_MS = String(Math.round(seconds * 1000));
   }
@@ -1241,10 +1248,18 @@ files
   )
   .action(async (folderPath = "/") => {
     try {
+      const path = folderPath || "/";
+      const items = await (await restoreClient()).files.listWebDav(path);
       print(
-        await (await restoreClient()).files.listWebDav(folderPath),
+        {
+          title: `WebDAV ${path}`,
+          path,
+          empty: items.length === 0,
+          items,
+          ...(items.length === 0 ? { message: "Directory is empty." } : {}),
+        },
         jsonOutput(),
-        { title: `WebDAV ${folderPath}`, empty: "Directory is empty." },
+        { title: `WebDAV ${path}`, empty: "Directory is empty." },
       );
     } catch (error) {
       const status =
@@ -2026,16 +2041,69 @@ program
     }),
   );
 
-program
+const helpCmd = program
   .command("help")
-  .description("Inspect instance-provided help")
-  .command("show")
-  .description("List help documentation links")
-  .action(
-    withClient((client) => client.modules.getHelpOverview(), {
-      title: "Help",
-    }),
-  );
+  .description("Inspect instance-provided help or CLI command topics");
+helpCmd
+  .command("show [topic]")
+  .description(
+    "List instance help links, or show CLI help for a command topic (e.g. routes, mail)",
+  )
+  .action(async (topic?: string) => {
+    try {
+      const name = topic?.trim();
+      if (name) {
+        const cmd = program.commands.find(
+          (candidate) =>
+            !(candidate as Command & { _hidden?: boolean })._hidden &&
+            (candidate.name() === name || candidate.aliases().includes(name)),
+        );
+        if (!cmd) {
+          const topics = program.commands
+            .filter(
+              (candidate) =>
+                !(candidate as Command & { _hidden?: boolean })._hidden,
+            )
+            .map((candidate) => candidate.name())
+            .sort()
+            .join(", ");
+          throw new Error(
+            `Unknown help topic "${name}". Available CLI topics: ${topics}`,
+          );
+        }
+        if (jsonOutput()) {
+          emitHelpJson({
+            name: `iserv ${cmd.name()}`,
+            version: CLI_VERSION,
+            description: cmd.description(),
+            options: cmd.options.map((option) => ({
+              flags: option.flags,
+              description: option.description,
+            })),
+            commands: cmd.commands
+              .filter(
+                (sub) => !(sub as Command & { _hidden?: boolean })._hidden,
+              )
+              .map((sub) => ({
+                name: sub.name(),
+                description: sub.description(),
+                ...(sub.aliases().length > 0 ? { aliases: sub.aliases() } : {}),
+              })),
+          });
+          return;
+        }
+        cmd.outputHelp();
+        return;
+      }
+      print(
+        await (await restoreClient()).modules.getHelpOverview(),
+        jsonOutput(),
+        { title: "Help" },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 
 program
   .command("office")
@@ -2251,12 +2319,24 @@ configCmd
       const [, key, raw = ""] = match;
       const directory = await configDirectory();
       const current = await loadCliConfig(directory);
-      if (key === "timeoutSeconds" || key === "defaultLimit") {
+      if (key === "timeoutSeconds") {
         const value = Number(raw);
-        if (!Number.isInteger(value) || value < 1) {
-          throw new Error(`${key} must be a positive integer`);
+        if (
+          !Number.isInteger(value) ||
+          value < 1 ||
+          value > MAX_TIMEOUT_SECONDS
+        ) {
+          throw new Error(
+            `timeoutSeconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`,
+          );
         }
-        current[key] = value;
+        current.timeoutSeconds = value;
+      } else if (key === "defaultLimit") {
+        const value = Number(raw);
+        if (!Number.isInteger(value) || value < 1 || value > 1000) {
+          throw new Error("defaultLimit must be an integer between 1 and 1000");
+        }
+        current.defaultLimit = value;
       } else if (key === "host") {
         const { normalizeInstanceUrl } = await api();
         current.host = normalizeInstanceUrl(raw).hostname;
