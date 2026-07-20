@@ -24,7 +24,31 @@ or an unfamiliar challenge. Secrets and session cookies are stored only in the
 operating system credential store.
 
 Run `iserv --help` and `iserv <command> --help` for the complete command tree.
-Use `--json` for machine-readable output. The real instance URL must never be
-added to this repository, logs, fixtures, screenshots, or issues.
+
+## Output
+
+Interactive output is designed for people: compact headings, aligned values,
+bounded tables, clear empty states, and actionable errors. Color is used only
+when stdout is a terminal and can be disabled with `NO_COLOR=1`.
+
+```text
+Session
+● Connected
+Profile  school
+
+Routes matching “calendar”  6
+  Method   Id                  Module     Status      Summary
+  GET      calendar.upcoming   calendar   supported   List upcoming calendar events
+```
+
+Automation remains stable and compact. Put the global option before the command:
+
+```sh
+iserv --json auth status
+iserv --json routes search calendar
+```
+
+Human output and debug errors are redacted before display. The real instance URL
+must never be added to this repository, logs, fixtures, screenshots, or issues.
 
 This software is not affiliated with or endorsed by IServ GmbH.

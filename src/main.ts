@@ -10,37 +10,72 @@ import {
 import { input, password } from "@inquirer/prompts";
 import { Command, Option } from "commander";
 import open from "open";
-import { CommanderExit, fail, print } from "./output.js";
+import {
+  CommanderExit,
+  fail,
+  type PrintOptions,
+  print,
+  printAuthStatus,
+  printProfiles,
+  printRoute,
+  printRoutes,
+  printRouteTree,
+  printSuccess,
+  uiStyle,
+} from "./output.js";
 import { parseParameters } from "./parameters.js";
 
 const program = new Command();
+const helpStyle = uiStyle();
 program
   .name("iserv")
-  .description("Normal-user CLI for IServ school servers")
-  .version("0.1.0");
-program.option("--json", "emit compact JSON");
+  .description("A calm, secure command line for your IServ account")
+  .version("0.2.0")
+  .showSuggestionAfterError()
+  .showHelpAfterError("Run with --help to see available commands.")
+  .configureHelp({
+    sortOptions: true,
+    sortSubcommands: true,
+    styleTitle: (value) => helpStyle.bold(value),
+    styleCommandText: (value) => helpStyle.cyan(value),
+    styleOptionText: (value) => helpStyle.cyan(value),
+    styleArgumentText: (value) => helpStyle.yellow(value),
+    styleSubcommandText: (value) => helpStyle.cyan(value),
+  });
+program
+  .option("--json", "emit stable machine-readable JSON")
+  .addHelpText(
+    "after",
+    `\n${helpStyle.bold("Start here")}\n  ${helpStyle.cyan("iserv auth login --url <your-instance>")}\n  ${helpStyle.cyan("iserv auth status")}\n  ${helpStyle.cyan("iserv routes tree")}\n`,
+  );
 
 const jsonOutput = () => Boolean(program.opts().json);
 const broker = () => new AuthBroker();
 const run =
-  <T extends unknown[]>(action: (...args: T) => Promise<unknown>) =>
+  <T extends unknown[]>(
+    action: (...args: T) => Promise<unknown>,
+    options: PrintOptions = {},
+  ) =>
   async (...args: T) => {
     try {
       const result = await action(...args);
-      if (result !== undefined) print(result, jsonOutput());
+      if (result !== undefined) print(result, jsonOutput(), options);
     } catch (error) {
       if (error instanceof CommanderExit) return;
       fail(error, jsonOutput());
     }
   };
-const withClient = (action: (client: IServClient) => Promise<unknown>) =>
-  run(async () => action(await broker().restore()));
+const withClient = (
+  action: (client: IServClient) => Promise<unknown>,
+  options: PrintOptions = {},
+) => run(async () => action(await broker().restore()), options);
 
 const auth = program
   .command("auth")
   .description("Authenticate and manage the active session");
 auth
   .command("login")
+  .description("Connect an account and save its session in the system keychain")
   .requiredOption("--url <url>", "custom IServ instance URL")
   .option("--profile <name>", "profile name", "default")
   .option("--username <name>", "account name")
@@ -58,10 +93,14 @@ auth
     "--allow-private-host",
     "allow an explicitly configured private-network host",
   )
+  .addHelpText(
+    "after",
+    `\n${helpStyle.bold("Examples")}\n  ${helpStyle.cyan("iserv auth login --url iserv.example")}\n  ${helpStyle.cyan("iserv auth login --url iserv.example --browser")}\n`,
+  )
   .action(async (options) => {
     try {
       const username =
-        options.username ?? (await input({ message: "Account" }));
+        options.username ?? (await input({ message: "Account name" }));
       const authBroker = broker();
       if (options.browser) {
         await authBroker.loginBrowser({
@@ -82,7 +121,8 @@ auth
             password({ message: challenge.prompt, mask: "•" }),
         });
       }
-      print(
+      printSuccess(
+        "Connected",
         { profile: options.profile, username, authenticated: true },
         jsonOutput(),
       );
@@ -92,63 +132,98 @@ auth
   });
 auth
   .command("status")
+  .description("Check whether a saved profile is connected")
   .option("--profile <name>")
-  .action(
-    run(async (options: { profile?: string }) => {
-      return broker().status(options.profile);
-    }),
-  );
+  .action(async (options: { profile?: string }) => {
+    try {
+      printAuthStatus(await broker().status(options.profile), jsonOutput());
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 auth
   .command("logout")
+  .description("End the remote session and remove it from the keychain")
   .option("--profile <name>")
-  .action(
-    run(async (options: { profile?: string }) => {
+  .action(async (options: { profile?: string }) => {
+    try {
       await broker().logout(options.profile);
-      return { loggedOut: true };
-    }),
-  );
+      printSuccess("Logged out", { loggedOut: true }, jsonOutput());
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 
 const profile = program.command("profile").description("Manage local profiles");
-profile.command("list").action(run(async () => new ProfileStore().read()));
-profile.command("use <name>").action(
-  run(async (name?: string) => {
-    await new ProfileStore().setActive(String(name));
-    return { activeProfile: name };
-  }),
-);
-profile.command("remove <name>").action(
-  run(async (name?: string) => {
-    const authBroker = broker();
-    await authBroker.logout(String(name));
-    await authBroker.profiles.remove(String(name));
-    return { removed: name };
-  }),
-);
+profile
+  .command("list")
+  .description("List saved profiles and show the active one")
+  .action(async () => {
+    try {
+      printProfiles(await new ProfileStore().read(), jsonOutput());
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+profile
+  .command("use <name>")
+  .description("Make a saved profile active")
+  .action(async (name?: string) => {
+    try {
+      await new ProfileStore().setActive(String(name));
+      printSuccess(
+        "Active profile changed",
+        { activeProfile: name },
+        jsonOutput(),
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+profile
+  .command("remove <name>")
+  .description("Log out and remove a saved profile")
+  .action(async (name?: string) => {
+    try {
+      const authBroker = broker();
+      await authBroker.logout(String(name));
+      await authBroker.profiles.remove(String(name));
+      printSuccess("Profile removed", { removed: name }, jsonOutput());
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 
 const routes = program
   .command("routes")
-  .description("Inspect and safely probe the route catalog");
-routes
-  .command("tree")
-  .action(() =>
-    print(
-      Object.fromEntries(
-        Object.entries(routeCatalog.tree()).map(([module, items]) => [
-          module,
-          items.map((route) => `${route.method} ${route.id} ${route.path}`),
-        ]),
-      ),
-      jsonOutput(),
-    ),
+  .description("Inspect and safely probe the route catalog")
+  .addHelpText(
+    "after",
+    `\n${helpStyle.bold("Examples")}\n  ${helpStyle.cyan("iserv routes tree")}\n  ${helpStyle.cyan("iserv routes search calendar")}\n  ${helpStyle.cyan("iserv routes show calendar.upcoming")}\n`,
   );
 routes
+  .command("tree")
+  .description("Browse every catalogued route by module")
+  .action(() => printRouteTree(routeCatalog.tree(), jsonOutput()));
+routes
   .command("search <query>")
-  .action((query) => print(routeCatalog.search(query), jsonOutput()));
+  .description("Find routes by ID, module, path, or description")
+  .action((query) =>
+    printRoutes(routeCatalog.search(query), query, jsonOutput()),
+  );
 routes
   .command("show <routeId>")
-  .action((routeId) => print(routeCatalog.get(routeId), jsonOutput()));
+  .description("Show the contract and provenance for one route")
+  .action((routeId) => {
+    try {
+      printRoute(routeCatalog.get(routeId), jsonOutput());
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 routes
   .command("probe <routeId>")
+  .description("Run a catalogued read-only route with the active profile")
   .option(
     "--param <name=value>",
     "route parameter",
@@ -163,6 +238,7 @@ routes
           parseParameters(options.param),
         ),
         jsonOutput(),
+        { title: `Probe · ${routeId}` },
       );
     } catch (error) {
       fail(error, jsonOutput());
@@ -170,7 +246,7 @@ routes
   });
 routes
   .command("serve")
-  .description("open the local route explorer")
+  .description("Open the local interactive route explorer")
   .action(async () => {
     try {
       const apiEntry = fileURLToPath(
@@ -190,7 +266,11 @@ routes
       const server = await startExplorerServer(
         client ? { client, assetsDirectory } : { assetsDirectory },
       );
-      process.stdout.write(`Explorer: ${server.url}\nPress Ctrl+C to stop.\n`);
+      process.stdout.write(
+        `${helpStyle.green("●")} ${helpStyle.bold("Explorer ready")}\n` +
+          `  ${helpStyle.dim("URL")}  ${server.url}\n` +
+          `  ${helpStyle.dim("Stop")} Ctrl+C\n`,
+      );
       await open(server.url);
       await new Promise<void>((resolve) => process.once("SIGINT", resolve));
       await server.close();
@@ -201,11 +281,18 @@ routes
 
 program
   .command("account")
+  .description("Inspect the signed-in account")
   .command("show")
-  .action(withClient((client) => client.users.getOwnInfo()));
-const users = program.command("users");
+  .description("Show your account and visible profile data")
+  .action(
+    withClient((client) => client.users.getOwnInfo(), { title: "Account" }),
+  );
+const users = program
+  .command("users")
+  .description("Find visible users and profiles");
 users
   .command("search <query>")
+  .description("Search the address book")
   .option("--limit <number>", "maximum results", "20")
   .action(async (query, options) => {
     try {
@@ -215,42 +302,90 @@ users
           Number(options.limit),
         ),
         jsonOutput(),
+        {
+          title: `Users matching “${query}”`,
+          empty: "No visible users matched this search.",
+        },
       );
     } catch (error) {
       fail(error, jsonOutput());
     }
   });
-users.command("show <username>").action(async (username) => {
-  try {
-    print(
-      await (await broker().restore()).users.getInfo(username),
-      jsonOutput(),
-    );
-  } catch (error) {
-    fail(error, jsonOutput());
-  }
-});
+users
+  .command("show <username>")
+  .description("Show one visible address-book profile")
+  .action(async (username) => {
+    try {
+      print(
+        await (await broker().restore()).users.getInfo(username),
+        jsonOutput(),
+        { title: "User" },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 
-const notifications = program.command("notifications");
+const notifications = program
+  .command("notifications")
+  .description("Read notification state and counters");
 notifications
   .command("list")
-  .action(withClient((client) => client.notifications.getAll()));
+  .description("List visible notifications")
+  .action(
+    withClient((client) => client.notifications.getAll(), {
+      title: "Notifications",
+      empty: "You have no notifications.",
+    }),
+  );
 notifications
   .command("badges")
-  .action(withClient((client) => client.notifications.getBadges()));
+  .description("Show unread counters for installed modules")
+  .action(
+    withClient((client) => client.notifications.getBadges(), {
+      title: "Badges",
+    }),
+  );
 notifications
   .command("read-all")
-  .action(withClient((client) => client.notifications.readAll()));
+  .description("Mark every visible notification as read")
+  .action(async () => {
+    try {
+      await (await broker().restore()).notifications.readAll();
+      printSuccess(
+        "Notifications marked as read",
+        { read: true },
+        jsonOutput(),
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 
-const calendar = program.command("calendar");
+const calendar = program
+  .command("calendar")
+  .description("Read calendars and events");
 calendar
   .command("upcoming")
-  .action(withClient((client) => client.calendar.getUpcomingEvents()));
+  .description("Show upcoming events")
+  .action(
+    withClient((client) => client.calendar.getUpcomingEvents(), {
+      title: "Upcoming events",
+      empty: "No upcoming events.",
+    }),
+  );
 calendar
   .command("sources")
-  .action(withClient((client) => client.calendar.getEventSources()));
+  .description("List visible calendars and event sources")
+  .action(
+    withClient((client) => client.calendar.getEventSources(), {
+      title: "Calendar sources",
+      empty: "No calendar sources are available.",
+    }),
+  );
 calendar
   .command("events")
+  .description("List events inside an ISO date range")
   .requiredOption("--start <iso>")
   .requiredOption("--end <iso>")
   .action(async (options) => {
@@ -261,30 +396,41 @@ calendar
           options.end,
         ),
         jsonOutput(),
+        { title: "Calendar events", empty: "No events in this range." },
       );
     } catch (error) {
       fail(error, jsonOutput());
     }
   });
 
-const files = program.command("files");
+const files = program
+  .command("files")
+  .description("Inspect storage and file metadata");
 files
   .command("quota")
-  .action(withClient((client) => client.files.getDiskSpace()));
-files.command("size <path>").action(async (path) => {
-  try {
-    print(
-      await (await broker().restore()).files.getFolderSize(path),
-      jsonOutput(),
-    );
-  } catch (error) {
-    fail(error, jsonOutput());
-  }
-});
+  .description("Show storage use and quota")
+  .action(
+    withClient((client) => client.files.getDiskSpace(), { title: "Storage" }),
+  );
+files
+  .command("size <path>")
+  .description("Calculate the size of an accessible remote folder")
+  .action(async (path) => {
+    try {
+      print(
+        await (await broker().restore()).files.getFolderSize(path),
+        jsonOutput(),
+        { title: "Folder size" },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 
-const mail = program.command("mail");
+const mail = program.command("mail").description("Read and send account email");
 mail
   .command("list")
+  .description("List bounded message metadata from the inbox")
   .option("--limit <number>", "maximum messages", "20")
   .action(async (options) => {
     try {
@@ -293,6 +439,7 @@ mail
           limit: Number(options.limit),
         }),
         jsonOutput(),
+        { title: "Inbox", empty: "No messages in this mailbox." },
       );
     } catch (error) {
       fail(error, jsonOutput());
@@ -300,6 +447,7 @@ mail
   });
 mail
   .command("show <uid>")
+  .description("Show one message by UID")
   .option("--mailbox <name>", "mailbox", "INBOX")
   .action(async (uid, options) => {
     try {
@@ -309,6 +457,7 @@ mail
           options.mailbox,
         ),
         jsonOutput(),
+        { title: `Message ${uid}` },
       );
     } catch (error) {
       fail(error, jsonOutput());
@@ -316,6 +465,7 @@ mail
   });
 mail
   .command("send")
+  .description("Send an email immediately")
   .requiredOption("--to <address>")
   .requiredOption("--subject <subject>")
   .requiredOption("--body <body>")
@@ -326,18 +476,27 @@ mail
         subject: options.subject,
         body: options.body,
       });
-      print({ sent: true }, jsonOutput());
+      printSuccess("Email sent", { sent: true }, jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
     }
   });
 
-const messenger = program.command("messenger");
+const messenger = program
+  .command("messenger")
+  .description("Read and send Matrix messages");
 messenger
   .command("rooms")
-  .action(withClient((client) => client.messenger.getRooms()));
+  .description("List joined rooms")
+  .action(
+    withClient((client) => client.messenger.getRooms(), {
+      title: "Messenger rooms",
+      empty: "No joined rooms.",
+    }),
+  );
 messenger
   .command("messages <roomId>")
+  .description("List a bounded page of room messages")
   .option("--limit <number>", "maximum messages", "20")
   .action(async (roomId, options) => {
     try {
@@ -346,6 +505,7 @@ messenger
           limit: Number(options.limit),
         }),
         jsonOutput(),
+        { title: "Messages", empty: "No messages in this page." },
       );
     } catch (error) {
       fail(error, jsonOutput());
@@ -353,47 +513,54 @@ messenger
   });
 messenger
   .command("send <roomId>")
+  .description("Send a room message immediately")
   .requiredOption("--body <body>")
   .action(async (roomId, options) => {
     try {
-      print(
-        await (await broker().restore()).messenger.sendMessage(
-          roomId,
-          options.body,
-        ),
-        jsonOutput(),
+      const result = await (await broker().restore()).messenger.sendMessage(
+        roomId,
+        options.body,
       );
+      printSuccess("Message sent", result, jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
     }
   });
 messenger
   .command("delete <roomId> <eventId>")
+  .description("Delete a message immediately")
   .action(async (roomId, eventId) => {
     try {
-      print(
-        await (await broker().restore()).messenger.deleteMessage(
-          roomId,
-          eventId,
-        ),
-        jsonOutput(),
+      const result = await (await broker().restore()).messenger.deleteMessage(
+        roomId,
+        eventId,
       );
+      printSuccess("Message deleted", result, jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
     }
   });
-messenger.command("leave <roomId>").action(async (roomId) => {
-  try {
-    await (await broker().restore()).messenger.leaveRoom(roomId);
-    print({ left: true, roomId }, jsonOutput());
-  } catch (error) {
-    fail(error, jsonOutput());
-  }
-});
+messenger
+  .command("leave <roomId>")
+  .description("Leave a room immediately")
+  .action(async (roomId) => {
+    try {
+      await (await broker().restore()).messenger.leaveRoom(roomId);
+      printSuccess("Room left", { left: true, roomId }, jsonOutput());
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 program
   .command("conference")
+  .description("Inspect videoconference availability")
   .command("health")
-  .action(withClient((client) => client.conference.getHealth()));
+  .description("Show conference service health")
+  .action(
+    withClient((client) => client.conference.getHealth(), {
+      title: "Conference",
+    }),
+  );
 
 program.parseAsync().catch((error) => {
   if (!(error instanceof CommanderExit)) fail(error, jsonOutput());
