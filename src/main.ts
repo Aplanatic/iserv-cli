@@ -33,7 +33,7 @@ import {
 import { parseParameters } from "./parameters.js";
 
 const CLI_NAME = "@aplanatic/iserv-cli";
-const CLI_VERSION = "0.6.11";
+const CLI_VERSION = "0.6.12";
 const DEFAULT_LIMIT = String(CONFIG_DEFAULTS.defaultLimit);
 
 const program = new Command();
@@ -65,10 +65,15 @@ program
     "--portable",
     "use ./.iserv in the current directory for config and profiles",
   )
+  .option(
+    "--dry-run",
+    "print what a write would do without calling the server (alias: --what-if)",
+  )
+  .option("--what-if", "alias for --dry-run")
   .option("-V, --version", "output the version number")
   .addHelpText("after", () => {
     const h = helpStyle();
-    return `\n${h.bold("Start here")}\n  ${h.cyan("iserv auth login --url <your-instance>")}\n  ${h.cyan("iserv auth status")}\n  ${h.cyan("iserv routes tree")}\n`;
+    return `\n${h.bold("Start here")}\n  ${h.cyan("iserv auth login --url <your-instance>")}\n  ${h.cyan("iserv auth status")}\n  ${h.cyan("iserv routes tree")}\n\n${h.bold("Environment")}\n  ${h.cyan("ISERV_HOST")} / ${h.cyan("ISERV_URL")}   default instance host for login\n  ${h.cyan("ISERV_TIMEOUT_MS")}           HTTP timeout in milliseconds\n  ${h.cyan("ISERV_DEBUG")}                set to 1 for diagnostics\n  ${h.cyan("ISERV_PORTABLE")}             set to 1 to use ./.iserv\n  ${h.cyan("ISERV_CONFIG_DIR")}           override config directory\n  ${h.cyan("ISERV_BROWSER_PATH")}         browser binary for --browser login\n  ${h.cyan("ISERV_USER_AGENT")}           override HTTP User-Agent\n`;
   })
   .action((options: { version?: boolean; json?: boolean }) => {
     applyGlobalFlags();
@@ -205,13 +210,44 @@ const boundedLimit = (value: string, maximum = 100): number => {
   }
   return parsed;
 };
-/** Writes require an explicit --confirm. */
+/** Writes require an explicit --confirm (skipped for --dry-run / --what-if). */
+const isDryRun = (): boolean => {
+  const opts = program.opts<{ dryRun?: boolean; whatIf?: boolean }>();
+  return Boolean(opts.dryRun || opts.whatIf);
+};
 const requireWriteConfirm = (
   options: { confirm?: boolean },
   action: string,
 ): void => {
   if (options.confirm) return;
   throw new Error(`Write blocked: ${action}. Pass --confirm to proceed.`);
+};
+const gateWrite = (
+  options: { confirm?: boolean },
+  action: string,
+  preview: Record<string, unknown> = {},
+): "proceed" | "dry-run" => {
+  if (isDryRun()) {
+    printWriteSuccess(
+      `Dry-run: ${action}`,
+      { dryRun: true, action, ...preview },
+      jsonOutput(),
+    );
+    return "dry-run";
+  }
+  requireWriteConfirm(options, action);
+  return "proceed";
+};
+const readPasswordStdin = async (): Promise<string> => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const secret = Buffer.concat(chunks)
+    .toString("utf8")
+    .replace(/\r?\n$/, "");
+  if (!secret) throw new Error("Empty password on stdin (--password-stdin)");
+  return secret;
 };
 const resolveSearchQuery = (
   positional: string | undefined,
@@ -299,6 +335,14 @@ auth
   .option("--url <url>", "IServ instance URL (or set ISERV_HOST / ISERV_URL)")
   .option("--profile <name>", "profile name", "default")
   .option("--username <name>", "account name")
+  .option(
+    "--password-stdin",
+    "read password from stdin (skips TTY password prompt)",
+  )
+  .option(
+    "--ephemeral",
+    "store cookies only; do not keep the password in the keychain",
+  )
   .addOption(
     new Option("--browser", "complete login in a local browser").conflicts(
       "terminal",
@@ -315,7 +359,7 @@ auth
   )
   .addHelpText("after", () => {
     const h = helpStyle();
-    return `\n${h.bold("Examples")}\n  ${h.cyan("iserv auth login --url iserv.example")}\n  ${h.cyan("iserv auth login --url iserv.example --browser")}\n`;
+    return `\n${h.bold("Examples")}\n  ${h.cyan("iserv auth login --url iserv.example")}\n  ${h.cyan("iserv auth login --url iserv.example --browser")}\n  ${h.cyan("printf '%s' \"$PASS\" | iserv auth login --url iserv.example --username u --password-stdin --ephemeral")}\n  ${h.dim("Note: --browser uses your installed Chrome/Edge/Chromium (ISERV_BROWSER_PATH); no Playwright browser download.")}\n`;
   })
   .action(async (options) => {
     try {
@@ -330,13 +374,20 @@ auth
           "Missing instance URL. Pass --url <host>, set ISERV_HOST / ISERV_URL, or add host to .iserv.json / config.",
         );
       }
+      if (options.browser && options.passwordStdin) {
+        throw new Error("--password-stdin cannot be combined with --browser");
+      }
       const { normalizeInstanceUrl } = await api();
       // Validate before any interactive prompts so bad URLs fail cleanly in pipes.
       normalizeInstanceUrl(
         url,
         options.allowPrivateHost ? { allowPrivateHost: true } : {},
       );
-      requireInteractiveTty("auth login");
+      if (!options.passwordStdin) {
+        requireInteractiveTty("auth login");
+      } else if (!options.username) {
+        throw new Error("--password-stdin requires --username");
+      }
       const { input, password } = await import("@inquirer/prompts");
       const username =
         options.username ?? (await input({ message: "Account name" }));
@@ -349,20 +400,34 @@ auth
           allowPrivateHost: options.allowPrivateHost,
         });
       } else {
-        const secret = await password({ message: "Password", mask: "•" });
+        const secret = options.passwordStdin
+          ? await readPasswordStdin()
+          : await password({ message: "Password", mask: "•" });
         await authBroker.login({
           profile: options.profile,
           url,
           username,
           password: secret,
           allowPrivateHost: options.allowPrivateHost,
-          challengeHandler: async (challenge) =>
-            password({ message: challenge.prompt, mask: "•" }),
+          ephemeral: Boolean(options.ephemeral),
+          challengeHandler: async (challenge) => {
+            if (!process.stdin.isTTY || !process.stdout.isTTY) {
+              throw new Error(
+                "Auth challenge requires a TTY. Re-run interactively or complete the challenge in the browser.",
+              );
+            }
+            return password({ message: challenge.prompt, mask: "•" });
+          },
         });
       }
       printWriteSuccess(
         "Connected",
-        { profile: options.profile, username, authenticated: true },
+        {
+          profile: options.profile,
+          username,
+          authenticated: true,
+          ...(options.ephemeral ? { ephemeral: true } : {}),
+        },
         jsonOutput(),
       );
     } catch (error) {
@@ -389,16 +454,42 @@ auth
     "End the remote session and remove it from the keychain (requires --confirm)",
   )
   .option("--profile <name>")
+  .option("--all", "log out every saved profile")
   .option("--confirm", "required acknowledgement that this ends the session")
-  .action(async (options: { profile?: string; confirm?: boolean }) => {
-    try {
-      requireWriteConfirm(options, "auth logout");
-      await (await broker()).logout(options.profile);
-      printWriteSuccess("Logged out", { loggedOut: true }, jsonOutput());
-    } catch (error) {
-      fail(error, jsonOutput());
-    }
-  });
+  .action(
+    async (options: { profile?: string; all?: boolean; confirm?: boolean }) => {
+      try {
+        if (
+          gateWrite(
+            options,
+            options.all ? "auth logout --all" : "auth logout",
+            {
+              all: Boolean(options.all),
+              profile: options.profile ?? null,
+            },
+          ) === "dry-run"
+        ) {
+          return;
+        }
+        if (options.all) {
+          if (options.profile) {
+            throw new Error("Pass either --all or --profile, not both");
+          }
+          const names = await (await broker()).logoutAll();
+          printWriteSuccess(
+            "Logged out all profiles",
+            { loggedOut: true, profiles: names },
+            jsonOutput(),
+          );
+          return;
+        }
+        await (await broker()).logout(options.profile);
+        printWriteSuccess("Logged out", { loggedOut: true }, jsonOutput());
+      } catch (error) {
+        fail(error, jsonOutput());
+      }
+    },
+  );
 
 const profile = program.command("profile").description("Manage local profiles");
 profile
@@ -429,27 +520,71 @@ profile
     }
   });
 profile
-  .command("remove <name>")
-  .description("Log out and remove a saved profile (requires --confirm)")
+  .command("remove")
+  .description(
+    "Log out and remove a saved profile (requires --confirm). Pass a name or --all.",
+  )
+  .argument("[name]", "profile name (omit with --all)")
+  .option("--all", "remove every saved profile")
   .option("--confirm", "required acknowledgement that this removes the profile")
-  .action(async (name: string, options: { confirm?: boolean }) => {
-    try {
-      requireWriteConfirm(options, "profile remove");
-      const authBroker = await broker();
-      await authBroker.logout(String(name));
-      const removed = await authBroker.profiles.remove(String(name));
-      printWriteSuccess(
-        "Profile removed",
-        {
-          removed: name,
-          ...(removed.backupPath ? { backupPath: removed.backupPath } : {}),
-        },
-        jsonOutput(),
-      );
-    } catch (error) {
-      fail(error, jsonOutput());
-    }
-  });
+  .action(
+    async (
+      name: string | undefined,
+      options: { all?: boolean; confirm?: boolean },
+    ) => {
+      try {
+        if (options.all && name) {
+          throw new Error("Pass either a profile name or --all, not both");
+        }
+        if (!options.all && !name) {
+          throw new Error("Pass a profile name or --all");
+        }
+        if (
+          gateWrite(
+            options,
+            options.all ? "profile remove --all" : "profile remove",
+            { all: Boolean(options.all), name: name ?? null },
+          ) === "dry-run"
+        ) {
+          return;
+        }
+        const authBroker = await broker();
+        if (options.all) {
+          const { ProfileStore } = await api();
+          const store = new ProfileStore();
+          const document = await store.read();
+          const names = document.profiles.map((profile) => profile.name);
+          const backups: string[] = [];
+          for (const profileName of names) {
+            await authBroker.logout(profileName);
+            const removed = await authBroker.profiles.remove(profileName);
+            if (removed.backupPath) backups.push(removed.backupPath);
+          }
+          printWriteSuccess(
+            "All profiles removed",
+            {
+              removed: names,
+              ...(backups.length > 0 ? { backupPaths: backups } : {}),
+            },
+            jsonOutput(),
+          );
+          return;
+        }
+        await authBroker.logout(String(name));
+        const removed = await authBroker.profiles.remove(String(name));
+        printWriteSuccess(
+          "Profile removed",
+          {
+            removed: name,
+            ...(removed.backupPath ? { backupPath: removed.backupPath } : {}),
+          },
+          jsonOutput(),
+        );
+      } catch (error) {
+        fail(error, jsonOutput());
+      }
+    },
+  );
 
 const routes = program
   .command("routes")
@@ -805,7 +940,7 @@ notifications
   )
   .action(async (options: { confirm?: boolean }) => {
     try {
-      requireWriteConfirm(options, "notifications read-all");
+      if (gateWrite(options, "notifications read-all") === "dry-run") return;
       await (await restoreClient()).notifications.readAll();
       printWriteSuccess(
         "Notifications marked as read",
@@ -948,7 +1083,16 @@ calendar
       confirm?: boolean;
     }) => {
       try {
-        requireWriteConfirm(options, "calendar create");
+        if (
+          gateWrite(options, "calendar create", {
+            subject: options.subject,
+            calendar: options.calendar,
+            start: options.start,
+            end: options.end,
+          }) === "dry-run"
+        ) {
+          return;
+        }
         const result = await (await restoreClient()).calendar.createEvent({
           subject: options.subject,
           calendar: options.calendar,
@@ -989,7 +1133,15 @@ calendar
       confirm?: boolean;
     }) => {
       try {
-        requireWriteConfirm(options, "calendar delete");
+        if (
+          gateWrite(options, "calendar delete", {
+            uid: options.uid,
+            calendar: options.calendar,
+            series: Boolean(options.series),
+          }) === "dry-run"
+        ) {
+          return;
+        }
         const result = await (await restoreClient()).calendar.deleteEvent({
           uid: options.uid,
           hash: options.hash,
@@ -1031,6 +1183,21 @@ files
         await (await restoreClient()).files.getFolderSize(path),
         jsonOutput(),
         { title: "Folder size" },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+files
+  .command("ls [path]")
+  .alias("list")
+  .description("List a WebDAV directory (default: /)")
+  .action(async (folderPath = "/") => {
+    try {
+      print(
+        await (await restoreClient()).files.listWebDav(folderPath),
+        jsonOutput(),
+        { title: `WebDAV ${folderPath}`, empty: "Directory is empty." },
       );
     } catch (error) {
       fail(error, jsonOutput());
@@ -1117,7 +1284,9 @@ mail
   });
 mail
   .command("send")
-  .description("Send an email (requires --confirm)")
+  .description(
+    "Send an email via the IServ SMTP host on port 465/587 (requires --confirm)",
+  )
   .requiredOption(
     "--to <address>",
     "recipient (repeatable or comma-separated)",
@@ -1134,7 +1303,13 @@ mail
     collectOption,
   )
   .requiredOption("--subject <subject>")
-  .requiredOption("--body <body>")
+  .option("--body <body>", "plain-text body (required unless --html-body)")
+  .option("--html-body <html>", "HTML body (optional alongside --body)")
+  .option(
+    "--attachment <path>",
+    "file to attach (repeatable; ~ and absolute paths allowed)",
+    collectOption,
+  )
   .option(
     "--idempotency-key <key>",
     "stable key so retries do not double-send (auto-generated if omitted)",
@@ -1143,20 +1318,42 @@ mail
     "--confirm",
     "required acknowledgement that this writes to the server",
   )
+  .addHelpText("after", () => {
+    const h = helpStyle();
+    return `\n${h.bold("Notes")}\n  SMTP uses your IServ domain only (ports 465 or 587). Attachments accept ~/… and absolute paths.\n`;
+  })
   .action(
     async (options: {
       to: string[];
       cc?: string[];
       bcc?: string[];
       subject: string;
-      body: string;
+      body?: string;
+      htmlBody?: string;
+      attachment?: string[];
       idempotencyKey?: string;
       confirm?: boolean;
     }) => {
       try {
-        requireWriteConfirm(options, "mail send");
-        await ensureConfig();
+        if (!options.body && !options.htmlBody) {
+          throw new Error("Provide --body and/or --html-body");
+        }
         const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey);
+        if (
+          gateWrite(options, "mail send", {
+            to: options.to,
+            ...(options.cc?.length ? { cc: options.cc } : {}),
+            ...(options.bcc?.length ? { bcc: options.bcc } : {}),
+            subject: options.subject,
+            hasBody: Boolean(options.body),
+            hasHtmlBody: Boolean(options.htmlBody),
+            attachments: options.attachment ?? [],
+            idempotencyKey,
+          }) === "dry-run"
+        ) {
+          return;
+        }
+        await ensureConfig();
         if (
           (await claimIdempotencyKey("mail send", idempotencyKey)) ===
           "completed"
@@ -1173,7 +1370,11 @@ mail
           ...(options.cc?.length ? { cc: options.cc } : {}),
           ...(options.bcc?.length ? { bcc: options.bcc } : {}),
           subject: options.subject,
-          body: options.body,
+          body: options.body ?? "",
+          ...(options.htmlBody ? { htmlBody: options.htmlBody } : {}),
+          ...(options.attachment?.length
+            ? { attachments: options.attachment }
+            : {}),
           idempotencyKey,
         });
         await completeIdempotencyKey("mail send", idempotencyKey);
@@ -1185,6 +1386,9 @@ mail
             to: options.to,
             ...(options.cc?.length ? { cc: options.cc } : {}),
             ...(options.bcc?.length ? { bcc: options.bcc } : {}),
+            ...(options.attachment?.length
+              ? { attachments: options.attachment }
+              : {}),
           },
           jsonOutput(),
         );
@@ -1312,8 +1516,6 @@ messenger
       },
     ) => {
       try {
-        requireWriteConfirm(options, "messenger send");
-        await ensureConfig();
         const body = options.body ?? options.text;
         if (!body) {
           throw new Error(
@@ -1321,6 +1523,16 @@ messenger
           );
         }
         const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey);
+        if (
+          gateWrite(options, "messenger send", {
+            room,
+            body,
+            idempotencyKey,
+          }) === "dry-run"
+        ) {
+          return;
+        }
+        await ensureConfig();
         if (
           (await claimIdempotencyKey("messenger send", idempotencyKey)) ===
           "completed"
@@ -1352,6 +1564,35 @@ messenger
     },
   );
 messenger
+  .command("create-direct <matrixId>")
+  .description(
+    "Create (or open) a direct-message room with a Matrix user id (requires --confirm)",
+  )
+  .option(
+    "--confirm",
+    "required acknowledgement that this writes to the server",
+  )
+  .action(async (matrixId: string, options: { confirm?: boolean }) => {
+    try {
+      if (
+        gateWrite(options, "messenger create-direct", { matrixId }) ===
+        "dry-run"
+      ) {
+        return;
+      }
+      const result = await (
+        await restoreMessengerClient()
+      ).messenger.createDirectMessage(matrixId);
+      printWriteSuccess(
+        "Direct message room ready",
+        { created: true, result },
+        jsonOutput(),
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+messenger
   .command("delete <roomId> <eventId>")
   .description("Delete a message (requires --confirm)")
   .option(
@@ -1360,7 +1601,12 @@ messenger
   )
   .action(async (roomId, eventId, options: { confirm?: boolean }) => {
     try {
-      requireWriteConfirm(options, "messenger delete");
+      if (
+        gateWrite(options, "messenger delete", { roomId, eventId }) ===
+        "dry-run"
+      ) {
+        return;
+      }
       const result = await (
         await restoreMessengerClient()
       ).messenger.deleteMessage(roomId, eventId);
@@ -1382,7 +1628,9 @@ messenger
   )
   .action(async (roomId, options: { confirm?: boolean }) => {
     try {
-      requireWriteConfirm(options, "messenger leave");
+      if (gateWrite(options, "messenger leave", { roomId }) === "dry-run") {
+        return;
+      }
       await (await restoreMessengerClient()).messenger.leaveRoom(roomId);
       printWriteSuccess("Room left", { left: true, roomId }, jsonOutput());
     } catch (error) {
@@ -1404,7 +1652,15 @@ messenger
       options: { emoji: string; confirm?: boolean },
     ) => {
       try {
-        requireWriteConfirm(options, "messenger react");
+        if (
+          gateWrite(options, "messenger react", {
+            roomId,
+            eventId,
+            emoji: options.emoji,
+          }) === "dry-run"
+        ) {
+          return;
+        }
         const result = await (
           await restoreMessengerClient()
         ).messenger.reactToMessage(roomId, eventId, options.emoji);
@@ -1818,7 +2074,12 @@ configCmd
           env: {
             ISERV_TIMEOUT_MS: process.env.ISERV_TIMEOUT_MS ?? null,
             ISERV_HOST: process.env.ISERV_HOST ?? null,
+            ISERV_URL: process.env.ISERV_URL ?? null,
             ISERV_PORTABLE: process.env.ISERV_PORTABLE ?? null,
+            ISERV_DEBUG: process.env.ISERV_DEBUG ?? null,
+            ISERV_CONFIG_DIR: process.env.ISERV_CONFIG_DIR ?? null,
+            ISERV_BROWSER_PATH: process.env.ISERV_BROWSER_PATH ?? null,
+            ISERV_USER_AGENT: process.env.ISERV_USER_AGENT ?? null,
           },
         },
         jsonOutput(),

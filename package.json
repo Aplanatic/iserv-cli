@@ -1,6 +1,6 @@
 {
   "name": "@aplanatic/iserv-cli",
-  "version": "0.6.11",
+  "version": "0.6.12",
   "description": "Cross-platform CLI for normal-user IServ access",
   "type": "module",
   "bin": {
@@ -25,7 +25,7 @@
     "prepare": "npm run build"
   },
   "dependencies": {
-    "@aplanatic/iserv-api": "^1.8.11",
+    "@aplanatic/iserv-api": "^1.8.12",
     "@inquirer/prompts": "^7.8.6",
     "commander": "^14.0.2",
     "open": "^11.0.0"

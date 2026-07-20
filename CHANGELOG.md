@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.12
+
+- Mail `--attachment` / `--html-body`; `~` and absolute attachment paths
+- `files ls` WebDAV listing; `messenger create-direct`
+- `auth login --password-stdin` / `--ephemeral`; `logout --all` / `profile remove --all`
+- Global `--dry-run` / `--what-if` for write commands
+- Documented env vars in `--help`; clearer `--browser` (system Chrome/Edge, no Playwright download)
+- Notes: SMTP stays on IServ host ports 465/587 by design
+
 ## 0.6.11
 
 - File-lock + `.bak` backup for `profiles.json`
