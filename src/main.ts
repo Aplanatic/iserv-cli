@@ -1,15 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  AuthBroker,
-  type IServClient,
-  ProfileStore,
-  routeCatalog,
-  startExplorerServer,
-} from "@aplanatic/iserv-api";
-import { input, password } from "@inquirer/prompts";
+import type { IServClient } from "@aplanatic/iserv-api";
 import { Command, Option } from "commander";
-import open from "open";
 import {
   CommanderExit,
   fail,
@@ -31,7 +23,7 @@ const helpStyle = uiStyle();
 program
   .name("iserv")
   .description("A calm, secure command line for your IServ account")
-  .version("0.4.0")
+  .version("0.5.0")
   .showSuggestionAfterError()
   .showHelpAfterError("Run with --help to see available commands.")
   .configureHelp({
@@ -51,7 +43,27 @@ program
   );
 
 const jsonOutput = () => Boolean(program.opts().json);
-const broker = () => new AuthBroker();
+let apiPromise: Promise<typeof import("@aplanatic/iserv-api")> | undefined;
+const api = () => (apiPromise ??= import("@aplanatic/iserv-api"));
+let catalogPromise:
+  | Promise<typeof import("@aplanatic/iserv-api/catalog")>
+  | undefined;
+const catalog = () =>
+  (catalogPromise ??= import("@aplanatic/iserv-api/catalog"));
+let brokerPromise:
+  | Promise<import("@aplanatic/iserv-api").AuthBroker>
+  | undefined;
+const broker = () =>
+  (brokerPromise ??= api().then(({ AuthBroker }) => new AuthBroker()));
+const restoreClient = async () => (await broker()).restore();
+const restoreMessengerClient = async () => (await broker()).restoreMessenger();
+const boundedLimit = (value: string, maximum = 100): number => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > maximum) {
+    throw new Error(`Limit must be an integer between 1 and ${maximum}`);
+  }
+  return parsed;
+};
 const run =
   <T extends unknown[]>(
     action: (...args: T) => Promise<unknown>,
@@ -69,11 +81,11 @@ const run =
 const withClient = (
   action: (client: IServClient) => Promise<unknown>,
   options: PrintOptions = {},
-) => run(async () => action(await broker().restore()), options);
+) => run(async () => action(await restoreClient()), options);
 const withMessengerClient = (
   action: (client: IServClient) => Promise<unknown>,
   options: PrintOptions = {},
-) => run(async () => action(await broker().restoreMessenger()), options);
+) => run(async () => action(await restoreMessengerClient()), options);
 
 async function readRoute(
   routeId: string,
@@ -81,7 +93,7 @@ async function readRoute(
   parameters: Record<string, string | number | boolean> = {},
 ): Promise<void> {
   try {
-    const result = await (await broker().restore()).executeReadRoute(
+    const result = await (await restoreClient()).executeReadRoute(
       routeId,
       parameters,
     );
@@ -120,9 +132,10 @@ auth
   )
   .action(async (options) => {
     try {
+      const { input, password } = await import("@inquirer/prompts");
       const username =
         options.username ?? (await input({ message: "Account name" }));
-      const authBroker = broker();
+      const authBroker = await broker();
       if (options.browser) {
         await authBroker.loginBrowser({
           profile: options.profile,
@@ -157,7 +170,10 @@ auth
   .option("--profile <name>")
   .action(async (options: { profile?: string }) => {
     try {
-      printAuthStatus(await broker().status(options.profile), jsonOutput());
+      printAuthStatus(
+        await (await broker()).status(options.profile),
+        jsonOutput(),
+      );
     } catch (error) {
       fail(error, jsonOutput());
     }
@@ -168,7 +184,7 @@ auth
   .option("--profile <name>")
   .action(async (options: { profile?: string }) => {
     try {
-      await broker().logout(options.profile);
+      await (await broker()).logout(options.profile);
       printSuccess("Logged out", { loggedOut: true }, jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
@@ -181,6 +197,7 @@ profile
   .description("List saved profiles and show the active one")
   .action(async () => {
     try {
+      const { ProfileStore } = await api();
       printProfiles(await new ProfileStore().read(), jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
@@ -191,6 +208,7 @@ profile
   .description("Make a saved profile active")
   .action(async (name?: string) => {
     try {
+      const { ProfileStore } = await api();
       await new ProfileStore().setActive(String(name));
       printSuccess(
         "Active profile changed",
@@ -206,7 +224,7 @@ profile
   .description("Log out and remove a saved profile")
   .action(async (name?: string) => {
     try {
-      const authBroker = broker();
+      const authBroker = await broker();
       await authBroker.logout(String(name));
       await authBroker.profiles.remove(String(name));
       printSuccess("Profile removed", { removed: name }, jsonOutput());
@@ -225,19 +243,99 @@ const routes = program
 routes
   .command("tree")
   .description("Browse every catalogued route by module")
-  .action(() => printRouteTree(routeCatalog.tree(), jsonOutput()));
+  .action(async () =>
+    printRouteTree((await catalog()).routeCatalog.tree(), jsonOutput()),
+  );
 routes
   .command("search <query>")
   .description("Find routes by ID, module, path, or description")
-  .action((query) =>
-    printRoutes(routeCatalog.search(query), query, jsonOutput()),
-  );
+  .option("--module <module>", "restrict to one module")
+  .option("--method <method>", "restrict to one HTTP method")
+  .option(
+    "--effect <effect>",
+    "restrict to read, write, communicative, or destructive",
+  )
+  .option(
+    "--status <status>",
+    "restrict to supported, experimental, documented-only, or deprecated",
+  )
+  .option("--limit <number>", "maximum matches", "25")
+  .action(async (query, options) => {
+    const { routeCatalog } = await catalog();
+    printRoutes(
+      routeCatalog.search(query, {
+        ...(options.module ? { module: options.module } : {}),
+        ...(options.method ? { method: options.method.toUpperCase() } : {}),
+        ...(options.effect ? { sideEffect: options.effect } : {}),
+        ...(options.status ? { status: options.status } : {}),
+        limit: Number(options.limit),
+      }),
+      query,
+      jsonOutput(),
+    );
+  });
+
+program
+  .command("search <query>")
+  .description("Quickly search routes and visible users in one command")
+  .addOption(
+    new Option("--scope <scope>", "search all, routes, or users")
+      .choices(["all", "routes", "users"])
+      .default("all"),
+  )
+  .option("--limit <number>", "maximum results per source", "10")
+  .action(async (query: string, options: { scope: string; limit: string }) => {
+    try {
+      const startedAt = performance.now();
+      const limit = boundedLimit(options.limit, 50);
+      const routePromise =
+        options.scope === "users"
+          ? Promise.resolve([])
+          : catalog().then(({ routeCatalog }) =>
+              routeCatalog.search(query, { limit }).map((route) => ({
+                id: route.id,
+                method: route.method,
+                module: route.module,
+                status: route.status,
+                summary: route.summary,
+              })),
+            );
+      const userPromise =
+        options.scope === "routes"
+          ? Promise.resolve({ users: [], warning: undefined })
+          : restoreClient()
+              .then((client) => client.users.searchAutocomplete(query, limit))
+              .then((users) => ({ users, warning: undefined }))
+              .catch(() => ({
+                users: [],
+                warning: "User search is temporarily unavailable.",
+              }));
+      const [matchedRoutes, userResult] = await Promise.all([
+        routePromise,
+        userPromise,
+      ]);
+      print(
+        {
+          query,
+          scope: options.scope,
+          durationMs: Math.round(performance.now() - startedAt),
+          routes: matchedRoutes,
+          users: userResult.users,
+          ...(userResult.warning ? { warnings: [userResult.warning] } : {}),
+        },
+        jsonOutput(),
+        { title: `Search · ${query}`, maxRows: limit },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 routes
   .command("show <routeId>")
   .description("Show the contract and provenance for one route")
-  .action((routeId) => {
+  .action(async (routeId) => {
     try {
-      printRoute(routeCatalog.get(routeId), jsonOutput());
+      printRoute((await catalog()).routeCatalog.get(routeId), jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
     }
@@ -254,13 +352,28 @@ routes
   .action(async (routeId, options) => {
     try {
       print(
-        await (await broker().restore()).executeReadRoute(
+        await (await restoreClient()).executeReadRoute(
           routeId,
           parseParameters(options.param),
         ),
         jsonOutput(),
         { title: `Probe · ${routeId}` },
       );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+routes
+  .command("probe-many <routeIds...>")
+  .description("Run up to eight catalogued read-only routes concurrently")
+  .option("--concurrency <number>", "parallel requests", "4")
+  .action(async (routeIds: string[], options: { concurrency: string }) => {
+    try {
+      const results = await (await restoreClient()).executeReadRoutes(
+        routeIds.map((routeId) => ({ routeId })),
+        { concurrency: Number(options.concurrency) },
+      );
+      print(results, jsonOutput(), { title: "Read-only batch", maxRows: 8 });
     } catch (error) {
       fail(error, jsonOutput());
     }
@@ -280,11 +393,11 @@ routes
       );
       let client: IServClient | undefined;
       try {
-        client = await broker().restore();
+        client = await restoreClient();
       } catch {
         /* Documentation-only mode. */
       }
-      const server = await startExplorerServer(
+      const server = await (await api()).startExplorerServer(
         client ? { client, assetsDirectory } : { assetsDirectory },
       );
       process.stdout.write(
@@ -292,7 +405,7 @@ routes
           `  ${helpStyle.dim("URL")}  ${server.url}\n` +
           `  ${helpStyle.dim("Stop")} Ctrl+C\n`,
       );
-      await open(server.url);
+      await (await import("open")).default(server.url);
       await new Promise<void>((resolve) => process.once("SIGINT", resolve));
       await server.close();
     } catch (error) {
@@ -331,9 +444,9 @@ users
   .action(async (query, options) => {
     try {
       print(
-        await (await broker().restore()).users.searchAutocomplete(
+        await (await restoreClient()).users.searchAutocomplete(
           query,
-          Number(options.limit),
+          boundedLimit(options.limit),
         ),
         jsonOutput(),
         {
@@ -351,7 +464,7 @@ users
   .action(async (username) => {
     try {
       print(
-        await (await broker().restore()).users.getInfo(username),
+        await (await restoreClient()).users.getInfo(username),
         jsonOutput(),
         { title: "User" },
       );
@@ -389,7 +502,7 @@ notifications
   .description("Mark every visible notification as read")
   .action(async () => {
     try {
-      await (await broker().restore()).notifications.readAll();
+      await (await restoreClient()).notifications.readAll();
       printSuccess(
         "Notifications marked as read",
         { read: true },
@@ -429,7 +542,7 @@ calendar
   .action(async (options) => {
     try {
       print(
-        await (await broker().restore()).calendar.getEvents(
+        await (await restoreClient()).calendar.getEvents(
           options.start,
           options.end,
         ),
@@ -452,7 +565,7 @@ calendar
   .action(async (query, options) => {
     try {
       print(
-        await (await broker().restore()).calendar.searchEvents(
+        await (await restoreClient()).calendar.searchEvents(
           query,
           options.start,
           options.end,
@@ -480,7 +593,7 @@ files
   .action(async (path) => {
     try {
       print(
-        await (await broker().restore()).files.getFolderSize(path),
+        await (await restoreClient()).files.getFolderSize(path),
         jsonOutput(),
         { title: "Folder size" },
       );
@@ -501,8 +614,8 @@ mail
   .action(async (options) => {
     try {
       print(
-        await (await broker().restore()).email.getEmails({
-          limit: Number(options.limit),
+        await (await restoreClient()).email.getEmails({
+          limit: boundedLimit(options.limit),
         }),
         jsonOutput(),
         { title: "Inbox", empty: "No messages in this mailbox." },
@@ -522,7 +635,7 @@ mail
   .action(async (uid, options) => {
     try {
       print(
-        await (await broker().restore()).email.getMessage(
+        await (await restoreClient()).email.getMessage(
           Number(uid),
           options.mailbox,
         ),
@@ -541,7 +654,7 @@ mail
   .requiredOption("--body <body>")
   .action(async (options) => {
     try {
-      await (await broker().restore()).email.sendEmail({
+      await (await restoreClient()).email.sendEmail({
         to: options.to,
         subject: options.subject,
         body: options.body,
@@ -571,12 +684,9 @@ messenger
   .action(async (roomId, options) => {
     try {
       print(
-        await (await broker().restoreMessenger()).messenger.getMessages(
-          roomId,
-          {
-            limit: Number(options.limit),
-          },
-        ),
+        await (await restoreMessengerClient()).messenger.getMessages(roomId, {
+          limit: boundedLimit(options.limit),
+        }),
         jsonOutput(),
         { title: "Messages", empty: "No messages in this page." },
       );
@@ -591,7 +701,7 @@ messenger
   .action(async (roomId, options) => {
     try {
       const result = await (
-        await broker().restoreMessenger()
+        await restoreMessengerClient()
       ).messenger.sendMessage(roomId, options.body);
       printSuccess("Message sent", result, jsonOutput());
     } catch (error) {
@@ -604,7 +714,7 @@ messenger
   .action(async (roomId, eventId) => {
     try {
       const result = await (
-        await broker().restoreMessenger()
+        await restoreMessengerClient()
       ).messenger.deleteMessage(roomId, eventId);
       printSuccess("Message deleted", result, jsonOutput());
     } catch (error) {
@@ -616,7 +726,7 @@ messenger
   .description("Leave a room immediately")
   .action(async (roomId) => {
     try {
-      await (await broker().restoreMessenger()).messenger.leaveRoom(roomId);
+      await (await restoreMessengerClient()).messenger.leaveRoom(roomId);
       printSuccess("Room left", { left: true, roomId }, jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
@@ -628,7 +738,7 @@ messenger
   .action(async (roomId: string) => {
     try {
       print(
-        await (await broker().restoreMessenger()).messenger.getMembers(roomId),
+        await (await restoreMessengerClient()).messenger.getMembers(roomId),
         jsonOutput(),
         { title: "Room members", empty: "No visible room members." },
       );
@@ -642,7 +752,7 @@ messenger
   .action(async (userId: string) => {
     try {
       print(
-        await (await broker().restoreMessenger()).messenger.getProfile(userId),
+        await (await restoreMessengerClient()).messenger.getProfile(userId),
         jsonOutput(),
         { title: "Messenger profile" },
       );

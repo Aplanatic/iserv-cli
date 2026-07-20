@@ -25,6 +25,32 @@ operating system credential store.
 
 Run `iserv --help` and `iserv <command> --help` for the complete command tree.
 
+## Fast search and agent workflows
+
+Use one ranked search instead of guessing command names:
+
+```sh
+iserv search "calendar events" --scope routes --limit 10
+iserv search "example student" --scope users --limit 10
+iserv routes search message --module messenger --method GET --effect read --status supported
+```
+
+`--scope routes` is offline and uses the lightweight catalog entry point. User search uses
+the bounded JSON autocomplete endpoint. `--scope all` runs both concurrently and preserves
+route results if directory search is temporarily unavailable.
+
+Agents invoking the CLI should put `--json` before the command and follow this sequence:
+
+```sh
+iserv --json auth status
+iserv --json search "calendar events" --scope routes
+iserv --json routes probe-many calendar.overview etherpad.list groupview.overview
+```
+
+`probe-many` restores the keychain session once and runs up to eight parameterless,
+catalogued session GET routes concurrently. It cannot execute writes or arbitrary URLs.
+Limits are validated before network work begins.
+
 ## Output
 
 Interactive output is designed for people: compact headings, aligned values,
@@ -65,6 +91,11 @@ iserv groups list
 iserv office show
 ```
 
+The focused command groups also cover account/profile, users, notifications, calendar,
+files, mail, messenger, videoconference health, app information, groups, and help. Use
+`iserv routes tree` for the complete, current route inventory rather than relying on a
+static command list.
+
 These commands issue only catalogued GET requests. Their default output confirms module
 availability and shows non-content-bearing page structure; it never prints authenticated
 HTML, form values, account identifiers, or hidden fields.
@@ -76,7 +107,9 @@ permission: IServ checks the account's rights when that action is actually invok
 
 For a local authenticated, read-only production-path check, run
 `npm run test:live`. It reports only pass/fail booleans and does not print account
-names, room names, messages, hostnames, or response bodies.
+names, room names, messages, hostnames, or response bodies. Normal startup defers the full
+SDK, browser prompts, and explorer opener until needed; route-only help, version, and
+search paths stay lightweight.
 
 Human output and debug errors are redacted before display. The real instance URL
 must never be added to this repository, logs, fixtures, screenshots, or issues.

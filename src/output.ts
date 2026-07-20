@@ -1,9 +1,5 @@
-import {
-  type AuthStatus,
-  type RouteDefinition,
-  redactText,
-  redactValue,
-} from "@aplanatic/iserv-api";
+import type { AuthStatus, RouteDefinition } from "@aplanatic/iserv-api";
+import { redactText, redactValue } from "@aplanatic/iserv-api/redaction";
 
 export interface PrintOptions {
   title?: string;
