@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 export interface CliConfig {
   timeoutSeconds?: number;
@@ -32,12 +32,20 @@ export function mergeConfig(
 }
 
 export async function readJsonFile<T>(path: string): Promise<T | undefined> {
+  let text: string;
   try {
-    return JSON.parse(await readFile(path, "utf8")) as T;
+    text = await readFile(path, "utf8");
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT")
       return undefined;
     throw error;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(
+      `Config file corrupted (${basename(path)}). Repair the JSON or delete the file and re-run.`,
+    );
   }
 }
 

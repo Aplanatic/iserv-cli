@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.14
+
+- Corrupt `config.json` / `.iserv.json` → clear "Config file corrupted" (no raw SyntaxError)
+- Messenger last-message hardening (never `[object Object]` in tables)
+- `config show` includes `resolved.host` (config file vs env source)
+- (0.6.13) dry-run send without room; nested bash/zsh completion — re-source `iserv completion bash`
+
 ## 0.6.13
 
 - Fix messenger rooms/sync Last column (`[object Object]` → message body)

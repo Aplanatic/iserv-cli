@@ -33,7 +33,7 @@ import {
 import { parseParameters } from "./parameters.js";
 
 const CLI_NAME = "@aplanatic/iserv-cli";
-const CLI_VERSION = "0.6.13";
+const CLI_VERSION = "0.6.14";
 const DEFAULT_LIMIT = String(CONFIG_DEFAULTS.defaultLimit);
 
 const program = new Command();
@@ -2105,10 +2105,32 @@ configCmd
   .action(async () => {
     try {
       await ensureConfig();
+      const host =
+        process.env.ISERV_URL?.trim() ||
+        process.env.ISERV_HOST?.trim() ||
+        runtimeConfig.host ||
+        null;
+      const timeoutMs = Number(
+        process.env.ISERV_TIMEOUT_MS ??
+          Math.round(runtimeConfig.timeoutSeconds * 1000),
+      );
       print(
         {
           directory: await configDirectory(),
           config: runtimeConfig,
+          resolved: {
+            host,
+            hostSource: process.env.ISERV_URL
+              ? "ISERV_URL"
+              : process.env.ISERV_HOST
+                ? "ISERV_HOST"
+                : runtimeConfig.host
+                  ? "config"
+                  : null,
+            timeoutMs,
+            defaultLimit: runtimeConfig.defaultLimit,
+            profile: runtimeConfig.profile ?? null,
+          },
           env: {
             ISERV_TIMEOUT_MS: process.env.ISERV_TIMEOUT_MS ?? null,
             ISERV_HOST: process.env.ISERV_HOST ?? null,
