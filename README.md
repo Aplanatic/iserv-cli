@@ -11,6 +11,8 @@ Configure npm authentication for the Aplanatic GitHub Packages registry, then ru
 npm install --global @aplanatic/iserv-cli
 ```
 
+Current package version: **0.6.16** (depends on `@aplanatic/iserv-api`).
+
 ## Login
 
 ```sh
@@ -20,22 +22,24 @@ iserv auth status
 
 The terminal flow securely prompts for the password and any detected one-time
 code. Use `--browser` when the instance requires WebAuthn, a password change,
-or an unfamiliar challenge (uses your installed Chrome/Edge/Chromium; no Playwright
-browser download). Secrets and session cookies are stored only in the operating system
-credential store.
+or an unfamiliar challenge (uses your installed Chrome/Edge/Chromium via
+`ISERV_BROWSER_PATH`; no Playwright browser download). Secrets and session cookies are
+stored only in the operating system credential store.
 
-For non-interactive login (CI/scripts), pipe a password and keep the session off disk:
+For non-interactive login (CI/scripts), pipe a password and keep the password off disk:
 
 ```sh
 printf '%s' "$PASS" | iserv auth login --url iserv.example --username u --password-stdin --ephemeral
 ```
 
-`--ephemeral` skips keychain persistence. `iserv auth logout --all` and
-`iserv profile remove --all` clear every stored profile.
+`--ephemeral` stores cookies only (no password in the keychain), so SMTP/WebDAV will not
+work until a full login. `iserv auth logout --all` and `iserv profile remove --all` clear
+every stored profile.
 
 Set `ISERV_HOST` or `ISERV_URL` when you prefer environment-based host selection.
 Run `iserv --help` and `iserv <command> --help` for the complete command tree, including
-documented environment variables. `iserv help show [topic]` prints focused topic help.
+documented environment variables. `iserv help show [topic]` prints focused topic help
+(for example `iserv help show routes`).
 
 ## Fast search and agent workflows
 
@@ -49,7 +53,8 @@ iserv routes search message --module messenger --method GET --effect read --stat
 
 `--scope routes` is offline and uses the lightweight catalog entry point. User search uses
 the bounded JSON autocomplete endpoint. `--scope all` runs both concurrently and preserves
-route results if directory search is temporarily unavailable.
+route results if directory search is temporarily unavailable. Dashed queries need
+`--query=--json` or `search -- "--json"`.
 
 Agents invoking the CLI should put `--json` before the command and follow this sequence:
 
@@ -65,13 +70,16 @@ Limits are validated before network work begins.
 
 ## Writes and dry-run
 
-Mutating commands require an explicit `--confirm`. Preview intent without network side
-effects using global `--dry-run` (or `--what-if`):
+Mutating commands require an explicit `--confirm` (including `auth logout`). There is no
+`ISERV_ALLOW_WRITES` bypass. Preview intent without network side effects using global
+`--dry-run` (or `--what-if`):
 
 ```sh
 iserv --dry-run mail send --to someone@example.com --subject Hi --body Test
 iserv mail send --to someone@example.com --subject Hi --body Test --confirm
 ```
+
+Successful writes print a `{ ok, action, … }` envelope in `--json` mode.
 
 ## Output
 
@@ -97,8 +105,9 @@ iserv --json routes search calendar
 iserv --version --json
 ```
 
-Use `--debug` / `--verbose` for redacted diagnostics, `--timeout <seconds>` (capped at 300)
-for request budgets, and `--portable` for machine-friendly plain text.
+Use `--debug` / `--verbose` for redacted diagnostics, `--timeout <seconds>` (capped at 300;
+sets `ISERV_TIMEOUT_MS`) for request budgets, and `--portable` for machine-friendly plain
+text. Project defaults can live in `.iserv.json`.
 
 Verified normal-user module checks have short, memorable commands:
 
@@ -106,15 +115,19 @@ Verified normal-user module checks have short, memorable commands:
 iserv exercises list
 iserv exercises past
 iserv timetable show
+iserv timetable today
 iserv polls list
 iserv forums list
 iserv news list
+iserv news show <id>
 iserv courses list
 iserv mailing-lists list
 iserv print show
 iserv etherpads list
 iserv groups list
 iserv office show
+iserv calendar holidays
+iserv messenger contacts
 ```
 
 The focused command groups also cover account/profile, users, notifications, calendar,
@@ -125,18 +138,18 @@ static command list.
 Useful extras:
 
 ```sh
-iserv files ls /                    # WebDAV listing (needs WebDAV + stored password)
+iserv files ls /                                      # WebDAV listing
 iserv mail send ... --attachment ~/doc.pdf --html-body '<p>Hi</p>' --confirm
-iserv messenger create-direct --user alice --confirm
-iserv doctor                        # local environment / session health
-iserv whatsnew                      # highlights since the last noted version
-iserv config                        # show resolved non-secret settings
-iserv completion bash               # shell completion script (also zsh)
+iserv messenger create-direct '@user:matrix.iserv.example' --confirm
+iserv doctor                                          # local environment / session health
+iserv whatsnew                                        # highlights since the last noted version
+iserv config show                                     # show resolved non-secret settings
+iserv completion bash                                 # shell completion script (also zsh)
 ```
 
-These commands issue only catalogued GET requests where applicable. Default output for
-overview modules confirms availability and shows non-content-bearing page structure; it
-never prints authenticated HTML, form values, account identifiers, or hidden fields.
+Overview and module commands prefer structured loaders when available; otherwise they show
+extracted page content (`HtmlExtractedData`) rather than raw HTML. Output never prints
+cookies, tokens, or full authenticated HTML documents.
 
 `iserv auth status` shows the verified display name, username, installed modules,
 experimental/unavailable integrations, verified read-route counts, and the number of

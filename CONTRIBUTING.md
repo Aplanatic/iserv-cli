@@ -9,6 +9,7 @@ Contributions must preserve least privilege, stable automation output, and priva
   permission-bypass behavior.
 - Keep human output bounded and readable; keep `--json` stable, bounded, and redacted.
 - New network operations must use the canonical API catalog and accurate side-effect labels.
+- Write commands must require `--confirm` and honor global `--dry-run` / `--what-if`.
 - Report vulnerabilities through [SECURITY.md](SECURITY.md), not a public issue.
 
 Run before submitting:
@@ -21,4 +22,5 @@ gitleaks git --redact=100 --log-opts=--all .
 ```
 
 Live tests are local-only and read-only. They must never print live response data or
-identifiers.
+identifiers. Update [README.md](README.md) and [CHANGELOG.md](CHANGELOG.md) when behavior
+changes.

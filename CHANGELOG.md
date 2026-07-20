@@ -76,3 +76,27 @@
 ## 0.6.7
 
 - Write gates, timetable today, and earlier QA hardening
+
+## 0.6.5
+
+- JSON errors on stdout, single headers, drop dead module commands
+
+## 0.6.4
+
+- Add `messenger contacts`
+
+## 0.6.3
+
+- Add `calendar holidays` countdown command
+
+## 0.6.2
+
+- Valid JSON for `probe-many` and stricter CLI validation
+
+## 0.6.1
+
+- Project command results into readable tables
+
+## 0.6.0
+
+- Render real tables for every command
