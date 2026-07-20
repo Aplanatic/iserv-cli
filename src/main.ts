@@ -23,7 +23,7 @@ const helpStyle = uiStyle();
 program
   .name("iserv")
   .description("A calm, secure command line for your IServ account")
-  .version("0.5.1")
+  .version("0.6.0")
   .showSuggestionAfterError()
   .showHelpAfterError("Run with --help to see available commands.")
   .configureHelp({
@@ -424,16 +424,28 @@ account
   );
 account
   .command("info")
-  .description("Check account information and recent login availability")
-  .action(() => readRoute("account.info", "Account information"));
+  .description("Show account information")
+  .action(
+    withClient((client) => client.modules.getAccountInfoPage(), {
+      title: "Account information",
+    }),
+  );
 account
   .command("settings")
-  .description("Check account settings without changing them")
-  .action(() => readRoute("account.settings", "Account settings"));
+  .description("Show account settings without changing them")
+  .action(
+    withClient((client) => client.modules.getAccountSettings(), {
+      title: "Account settings",
+    }),
+  );
 account
   .command("logins")
-  .description("Check the recent-login security overview")
-  .action(() => readRoute("account.last_logins", "Recent logins"));
+  .description("Show recent login history")
+  .action(
+    withClient((client) => client.modules.getAccountLogins(), {
+      title: "Recent logins",
+    }),
+  );
 const users = program
   .command("users")
   .description("Find visible users and profiles");
@@ -476,6 +488,7 @@ users
   .command("personal")
   .description("Check the personal address book without changing contacts")
   .action(() => readRoute("users.personal", "Personal address book"));
+// personal stays on readRoute (no dedicated structured loader yet)
 
 const notifications = program
   .command("notifications")
@@ -555,8 +568,13 @@ calendar
   });
 calendar
   .command("show")
-  .description("Check calendar application availability")
-  .action(() => readRoute("calendar.overview", "Calendar"));
+  .description("Show upcoming calendar overview")
+  .action(
+    withClient((client) => client.calendar.getUpcomingEvents(), {
+      title: "Calendar",
+      empty: "No upcoming events.",
+    }),
+  );
 calendar
   .command("search <query>")
   .description("Search visible events in an ISO date range")
@@ -603,8 +621,10 @@ files
   });
 files
   .command("show")
-  .description("Check the file overview without changing files")
-  .action(() => readRoute("files.overview", "Files"));
+  .description("Show storage quota overview")
+  .action(
+    withClient((client) => client.files.getDiskSpace(), { title: "Files" }),
+  );
 
 const mail = program.command("mail").description("Read and send account email");
 mail
@@ -626,8 +646,21 @@ mail
   });
 mail
   .command("status")
-  .description("Check mailbox availability without opening a message")
-  .action(() => readRoute("mail.overview", "Mail"));
+  .description("List recent inbox messages (mailbox status)")
+  .option("--limit <number>", "maximum messages", "10")
+  .action(async (options) => {
+    try {
+      print(
+        await (await restoreClient()).email.getEmails({
+          limit: boundedLimit(options.limit),
+        }),
+        jsonOutput(),
+        { title: "Mail", empty: "No messages in this mailbox." },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 mail
   .command("show <uid>")
   .description("Show one message by UID")
@@ -762,8 +795,13 @@ messenger
   });
 messenger
   .command("status")
-  .description("Check messenger availability without sending anything")
-  .action(() => readRoute("messenger.overview", "Messenger"));
+  .description("List joined rooms (messenger status)")
+  .action(
+    withMessengerClient((client) => client.messenger.getRooms(), {
+      title: "Messenger",
+      empty: "No joined rooms.",
+    }),
+  );
 program
   .command("conference")
   .description("Inspect videoconference availability")
@@ -777,109 +815,193 @@ program
 
 const exercises = program
   .command("exercises")
-  .description("Check current and past exercises");
+  .description("List current and past exercises");
 exercises
   .command("list")
-  .description("Check the current-exercise overview without changing it")
+  .description("List current exercises")
   .option("--search <query>", "optional server-side search")
-  .action((options: { search?: string }) =>
-    readRoute(
-      "exercise.list",
-      "Current exercises",
-      options.search ? { "filter[search]": options.search } : {},
-    ),
-  );
+  .action(async (options: { search?: string }) => {
+    try {
+      print(
+        await (await restoreClient()).modules.listExercises({
+          search: options.search,
+        }),
+        jsonOutput(),
+        { title: "Current exercises", empty: "No current exercises." },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 exercises
   .command("past")
-  .description("Check the past-exercise overview")
-  .action(() => readRoute("exercise.past", "Past exercises"));
+  .description("List past exercises")
+  .action(
+    withClient((client) => client.modules.listPastExercises(), {
+      title: "Past exercises",
+      empty: "No past exercises.",
+    }),
+  );
 
-program
+const timetable = program
   .command("timetable")
-  .description("Inspect timetable availability")
+  .description("Show your personal timetable");
+timetable
   .command("show")
-  .description("Check the timetable and change sections")
-  .action(() => readRoute("timetable.overview", "Timetable"));
+  .description("Show this week's personal timetable as a grid")
+  .option("--start <date>", "week start as DD.MM.YYYY or YYYY-MM-DD")
+  .action(async (options: { start?: string }) => {
+    try {
+      print(
+        await (await restoreClient()).timetable.getWeek({
+          startDate: options.start,
+        }),
+        jsonOutput(),
+        { title: "Timetable", maxRows: 20 },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 
 program
   .command("polls")
-  .description("Inspect polls visible to the account")
+  .description("List polls visible to the account")
   .command("list")
-  .description("Check the active-polls overview")
-  .action(() => readRoute("poll.list", "Polls"));
+  .description("List active polls")
+  .action(
+    withClient((client) => client.modules.listPolls(), {
+      title: "Polls",
+      empty: "No polls available.",
+    }),
+  );
 
 program
   .command("forums")
-  .description("Inspect forums without changing read state")
+  .description("List forums without changing read state")
   .command("list")
-  .description("Check the forum index; never marks topics as read")
-  .action(() => readRoute("forums.list", "Forums"));
+  .description("List forums")
+  .action(
+    withClient((client) => client.modules.listForums(), {
+      title: "Forums",
+      empty: "No forums found.",
+    }),
+  );
 
-const news = program.command("news").description("Inspect visible news");
+const news = program.command("news").description("List and show news");
 news
   .command("list")
-  .description("Check the news overview")
+  .description("List news entries")
   .option("--search <query>", "optional server-side search")
-  .action((options: { search?: string }) =>
-    readRoute(
-      "news.list",
-      "News",
-      options.search ? { search: options.search } : {},
-    ),
-  );
+  .option("--limit <number>", "maximum entries", "25")
+  .action(async (options: { search?: string; limit: string }) => {
+    try {
+      print(
+        await (await restoreClient()).modules.listNews({
+          search: options.search,
+          limit: boundedLimit(options.limit, 100),
+        }),
+        jsonOutput(),
+        { title: "News", empty: "No news entries.", maxRows: 40 },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 news
   .command("show <id>")
-  .description("Check one news entry by its visible ID")
-  .action((id: string) => readRoute("news.show", "News entry", { id }));
+  .description("Show one news entry by ID")
+  .action(async (id: string) => {
+    try {
+      print(await (await restoreClient()).modules.showNews(id), jsonOutput(), {
+        title: "News entry",
+      });
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 
 program
   .command("courses")
-  .description("Inspect course selections")
+  .description("List course selections")
   .command("list")
-  .description("Check currently available course selections")
-  .action(() => readRoute("course_selection.list", "Course selections"));
+  .description("List available course selections")
+  .action(
+    withClient((client) => client.modules.listCourseSelections(), {
+      title: "Course selections",
+      empty: "No open course selections.",
+    }),
+  );
 
 program
   .command("mailing-lists")
-  .description("Inspect mailing lists without changing them")
+  .description("List mailing lists without changing them")
   .command("list")
-  .description("Check visible mailing-list metadata")
-  .action(() => readRoute("mailing_lists.list", "Mailing lists"));
+  .description("List visible mailing lists")
+  .action(
+    withClient((client) => client.modules.listMailingLists(), {
+      title: "Mailing lists",
+      empty: "No mailing lists found.",
+    }),
+  );
 
 program
   .command("print")
   .description("Inspect printing without uploading or deleting files")
   .command("show")
-  .description("Check print-job metadata")
-  .action(() => readRoute("print.overview", "Printing"));
+  .description("Show print-job status")
+  .action(
+    withClient((client) => client.modules.listPrintJobs(), {
+      title: "Printing",
+      empty: "No print jobs queued.",
+    }),
+  );
 
 program
   .command("etherpads")
-  .description("Inspect collaborative pads without editing them")
+  .description("List collaborative pads without editing them")
   .command("list")
-  .description("Check visible Etherpads")
-  .action(() => readRoute("etherpad.list", "Etherpads"));
+  .description("List visible Etherpads")
+  .action(
+    withClient((client) => client.modules.listEtherpads(), {
+      title: "Etherpads",
+      empty: "No etherpads found.",
+    }),
+  );
 
 program
   .command("groups")
-  .description("Inspect group availability")
+  .description("List groups")
   .command("list")
-  .description("Check visible groups without joining or leaving")
-  .action(() => readRoute("groupview.overview", "Groups"));
+  .description("List visible groups without joining or leaving")
+  .action(
+    withClient((client) => client.modules.listGroups(), {
+      title: "Groups",
+      empty: "No groups found.",
+    }),
+  );
 
 program
   .command("help")
   .description("Inspect instance-provided help")
   .command("show")
-  .description("Check installed help documentation")
-  .action(() => readRoute("help.overview", "Help"));
+  .description("List help documentation links")
+  .action(
+    withClient((client) => client.modules.getHelpOverview(), {
+      title: "Help",
+    }),
+  );
 
 program
   .command("office")
-  .description("Inspect office integration availability")
+  .description("Inspect office integration")
   .command("show")
-  .description("Check the office entry point without opening a document")
-  .action(() => readRoute("office.overview", "Office"));
+  .description("Show office actions")
+  .action(
+    withClient((client) => client.modules.getOfficeInfo(), {
+      title: "Office",
+    }),
+  );
 
 program
   .command("app")

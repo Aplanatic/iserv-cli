@@ -1,9 +1,4 @@
-import type {
-  AuthStatus,
-  HtmlExtractedData,
-  HtmlTable,
-  RouteDefinition,
-} from "@aplanatic/iserv-api";
+import type { AuthStatus, RouteDefinition } from "@aplanatic/iserv-api";
 import { redactText, redactValue } from "@aplanatic/iserv-api/redaction";
 
 export interface PrintOptions {
@@ -277,9 +272,27 @@ export function print(
   options: PrintOptions = {},
 ): void {
   const safe = redactValue(value);
-  process.stdout.write(
-    json ? `${JSON.stringify(safe)}\n` : formatHuman(safe, options),
-  );
+  if (json) {
+    process.stdout.write(`${JSON.stringify(safe)}\n`);
+    return;
+  }
+  // Prefer structured renderers for timetable/module payloads
+  if (isRecord(safe) && (isTimetableData(safe) || isModuleList(safe) || Array.isArray(safe.rows) || Array.isArray(safe.items))) {
+    const color = options.color ?? canColor();
+    const style = uiStyle(color);
+    const lines: string[] = [];
+    if (options.title) lines.push(renderHeading(options.title, color));
+    lines.push(
+      ...renderStructuredData(safe, style, {
+        color,
+        width: terminalWidth(options.width),
+        maxRows: options.maxRows ?? 40,
+      }),
+    );
+    process.stdout.write(`${lines.join("\n").trimEnd()}\n`);
+    return;
+  }
+  process.stdout.write(formatHuman(safe, options));
 }
 
 export function printRouteTree(
@@ -583,147 +596,114 @@ export function printSuccess(
   process.stdout.write(`${lines.join("\n")}\n`);
 }
 
-// Render HTML extracted data for printReadRoute
-function renderHtmlExtracted(
-  extracted: HtmlExtractedData,
-  style: ReturnType<typeof uiStyle>,
-  options: Required<Pick<PrintOptions, "maxRows" | "color" | "width">>,
-): string[] {
-  const lines: string[] = [];
-
-  // Title
-  if (extracted.title) {
-    lines.push(renderHeading("Page", options.color));
-    lines.push(`  ${style.dim("Title")}  ${extracted.title}`);
-    lines.push("");
-  }
-
-  // Key-values (most important info)
-  const kvEntries = Object.entries(extracted.keyValues);
-  if (kvEntries.length > 0) {
-    lines.push(renderHeading("Fields", options.color));
-    lines.push(...renderKeyValues(kvEntries, options.color, "  "));
-    lines.push("");
-  }
-
-  // Sections
-  for (const section of extracted.sections) {
-    const prefix = "  ".repeat(section.level - 1);
-    lines.push(`${prefix}${style.bold(section.heading)}`);
-    for (const content of section.content) {
-      lines.push(`${prefix}  ${style.dim(content)}`);
-    }
-    if (section.content.length > 0) lines.push("");
-  }
-
-  // Tables
-  for (const table of extracted.tables) {
-    const label = table.caption
-      ? `Table: ${table.caption}`
-      : "Table";
-    lines.push(
-      renderHeading(label, options.color, `${table.rows.length} rows`),
-    );
-    if (table.headers.length > 0 && table.rows.length > 0) {
-      lines.push(
-        ...renderTable(
-          table.rows as unknown[] as Array<Record<string, unknown>>,
-          options,
-        ),
-      );
-    } else if (table.rows.length > 0) {
-      // No headers - render as numbered items
-      for (let i = 0; i < Math.min(table.rows.length, options.maxRows); i++) {
-        const row = table.rows[i]!;
-        const values = Object.values(row).join(" | ");
-        lines.push(`  ${i + 1}. ${values}`);
-      }
-      if (table.rows.length > options.maxRows) {
-        lines.push(
-          `  ${style.dim(`\u2026 ${table.rows.length - options.maxRows} more`)}`,
-        );
-      }
-    }
-    lines.push("");
-  }
-
-  // Links
-  if (extracted.links.length > 0) {
-    lines.push(
-      renderHeading("Links", options.color, `${extracted.links.length}`),
-    );
-    const maxLinks = Math.min(extracted.links.length, 20);
-    for (let i = 0; i < maxLinks; i++) {
-      const link = extracted.links[i]!;
-      lines.push(`  ${style.cyan(link.text)}  ${style.dim(link.href)}`);
-    }
-    if (extracted.links.length > maxLinks) {
-      lines.push(
-        `  ${style.dim(`\u2026 ${extracted.links.length - maxLinks} more links`)}`,
-      );
-    }
-    lines.push("");
-  }
-
-  // Lists
-  for (const list of extracted.lists) {
-    const label = list.label ?? "List";
-    lines.push(
-      renderHeading(label, options.color, `${list.items.length}`),
-    );
-    for (const item of list.items.slice(0, options.maxRows)) {
-      lines.push(`  \u2022 ${item}`);
-    }
-    if (list.items.length > options.maxRows) {
-      lines.push(
-        `  ${style.dim(`\u2026 ${list.items.length - options.maxRows} more`)}`,
-      );
-    }
-    lines.push("");
-  }
-
-  // Metadata
-  const metaEntries = Object.entries(extracted.metadata).filter(
-    ([k]) => !k.startsWith("_"),
-  );
-  if (metaEntries.length > 0) {
-    lines.push(renderHeading("Metadata", options.color));
-    lines.push(...renderKeyValues(metaEntries, options.color, "  "));
-    lines.push("");
-  }
-
-  // Size info
-  lines.push(
-    style.dim(
-      `${(extracted.bytes / 1024).toFixed(1)} KB page  \u00B7 ${extracted.tables.length} tables  \u00B7 ${extracted.links.length} links  \u00B7 ${extracted.forms.length} forms`,
-    ),
-  );
-
-  return lines;
+function isTimetableData(value: Record<string, unknown>): boolean {
+  return Array.isArray(value.rows) && Array.isArray(value.days) && Array.isArray(value.periods);
 }
 
-function renderHtmlStructure(
-  structure: Record<string, unknown>,
+function isModuleList(value: Record<string, unknown>): boolean {
+  return Array.isArray(value.items) && typeof value.title === "string";
+}
+
+function renderStructuredData(
+  value: unknown,
   style: ReturnType<typeof uiStyle>,
   options: Required<Pick<PrintOptions, "maxRows" | "color" | "width">>,
 ): string[] {
-  const lines: string[] = [];
-  lines.push(
-    renderHeading("Page structure", options.color),
-    ...renderKeyValues(
-      [
-        ["headings", String(structure.headings ?? 0)],
-        ["tables", String(structure.tables ?? 0)],
-        ["tableRows", String(structure.tableRows ?? 0)],
-        ["links", String(structure.links ?? 0)],
-        ["forms", structure.forms ? JSON.stringify(structure.forms) : "0"],
-        ["response size", `${structure.bytes ?? 0} bytes`],
-      ] as Array<[string, unknown]>,
-      options.color,
-      "  ",
-    ),
-  );
-  return lines;
+  if (!isRecord(value)) {
+    return renderRecord({ result: value }, options);
+  }
+
+  // Timetable week grid
+  if (isTimetableData(value)) {
+    const lines: string[] = [];
+    const detail = [
+      value.class ? String(value.class) : undefined,
+      value.startDate && value.endDate
+        ? `${value.startDate} \u2013 ${value.endDate}`
+        : undefined,
+      value.lastUpdated ? `updated ${value.lastUpdated}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(" \u00B7 ");
+    lines.push(renderHeading("Timetable", options.color, detail || undefined));
+    const rows = value.rows as Array<Record<string, unknown>>;
+    lines.push(...renderTable(rows, { ...options, maxRows: options.maxRows ?? 20 }));
+    const changes = Array.isArray(value.changes) ? value.changes : [];
+    if (changes.length > 0) {
+      lines.push(
+        "",
+        renderHeading("Changes", options.color, `${changes.length}`),
+        ...renderTable(normalizeRows(changes), options),
+      );
+    }
+    return lines;
+  }
+
+  // Module list results { title, items, message, empty }
+  if (isModuleList(value)) {
+    const lines: string[] = [];
+    const items = value.items as unknown[];
+    if (value.message && (value.empty || items.length === 0)) {
+      lines.push(style.dim(String(value.message)));
+      return lines;
+    }
+    if (items.length === 0) {
+      lines.push(style.dim(String(value.message ?? "Nothing to show.")));
+      return lines;
+    }
+    lines.push(
+      ...renderTable(normalizeRows(items), {
+        ...options,
+        maxRows: options.maxRows ?? 40,
+      }),
+    );
+    if (value.message) {
+      lines.push("", style.dim(String(value.message)));
+    }
+    return lines;
+  }
+
+  // Projected HTML extract { title, rows, headers, items, fields, message }
+  if (
+    value.rows &&
+    Array.isArray(value.rows) &&
+    (value.headers || value.title)
+  ) {
+    const lines: string[] = [];
+    if (value.title) lines.push(renderHeading(String(value.title), options.color));
+    lines.push(
+      ...renderTable(normalizeRows(value.rows as unknown[]), options),
+    );
+    return lines;
+  }
+
+  if (Array.isArray(value.items)) {
+    const lines: string[] = [];
+    if (value.title) lines.push(renderHeading(String(value.title), options.color));
+    if (value.message && (value.items as unknown[]).length === 0) {
+      lines.push(style.dim(String(value.message)));
+      return lines;
+    }
+    lines.push(
+      ...renderTable(normalizeRows(value.items as unknown[]), options),
+    );
+    return lines;
+  }
+
+  if (value.fields && isRecord(value.fields)) {
+    const lines: string[] = [];
+    if (value.title) lines.push(renderHeading(String(value.title), options.color));
+    lines.push(
+      ...renderKeyValues(Object.entries(value.fields as Record<string, unknown>), options.color),
+    );
+    return lines;
+  }
+
+  if (typeof value.message === "string" && Object.keys(value).length <= 3) {
+    return [style.dim(String(value.message))];
+  }
+
+  return renderRecord(value, options);
 }
 
 export function printReadRoute(
@@ -733,7 +713,17 @@ export function printReadRoute(
   options: PrintOptions = {},
 ): void {
   if (json) {
-    print(result, true);
+    // For agents/scripts: emit the structured data payload directly
+    print(
+      {
+        routeId: result.routeId,
+        status: result.status,
+        durationMs: result.durationMs,
+        ...(result._summary ? { summary: result._summary } : {}),
+        data: result.data,
+      },
+      true,
+    );
     return;
   }
   const color = options.color ?? canColor();
@@ -741,51 +731,21 @@ export function printReadRoute(
   const safe = redactValue(result.data);
   const state =
     result.status >= 200 && result.status < 300
-      ? style.green("\u25CF Available")
+      ? style.green("\u25CF OK")
       : style.yellow("\u25CF Unexpected response");
   const lines = [
     renderHeading(title, color),
     `${state}  ${style.dim(`${result.status} \u00B7 ${result.durationMs} ms`)}`,
-    `${style.dim("Route")}  ${result.routeId}`,
   ];
 
-  if (result._summary) {
-    lines.push(`${style.dim("Summary")} ${result._summary}`);
-  }
-
-  if (isRecord(safe) && safe.kind === "html-extracted") {
-    lines.push(
-      "",
-      ...renderHtmlExtracted(
-        safe as unknown as HtmlExtractedData,
-        style,
-        {
-          color,
-          width: terminalWidth(options.width),
-          maxRows: options.maxRows ?? 25,
-        },
-      ),
-    );
-  } else if (isRecord(safe) && safe.kind === "html-structure") {
-    // Legacy fallback for any remaining old-format data
-    lines.push(
-      "",
-      ...renderHtmlStructure(safe, style, {
-        color,
-        width: terminalWidth(options.width),
-        maxRows: options.maxRows ?? 25,
-      }),
-    );
-  } else {
-    lines.push(
-      "",
-      ...renderRecord(isRecord(safe) ? safe : { result: safe }, {
-        color,
-        width: terminalWidth(options.width),
-        maxRows: options.maxRows ?? 25,
-      }),
-    );
-  }
+  lines.push(
+    "",
+    ...renderStructuredData(safe, style, {
+      color,
+      width: terminalWidth(options.width),
+      maxRows: options.maxRows ?? 40,
+    }),
+  );
   process.stdout.write(`${lines.join("\n")}\n`);
 }
 

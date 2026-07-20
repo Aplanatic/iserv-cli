@@ -267,32 +267,38 @@ describe("human output", () => {
       ),
     ).toMatchInlineSnapshot(`
       "Past exercises
-      ● Available  200 · 82 ms
-      Route  exercise.past
+      ● OK  200 · 82 ms
 
-      Page
-        Title  Past Exercises - IServ
+      Kind   html-extracted
+      Title  Past Exercises - IServ
+      Bytes  12345
 
-      Fields
+      Tables  1
+        Caption         Headers   Rows
+        Exercise List   2 items   2 items
+
+      Lists  1
+        Label         Items
+        Attachments   2 items
+
+      Sections  1
+        Level   Heading        Content
+        2       Instructions   1 items
+
+      Links  1
+        Text     Href
+        Submit   /iserv/exercise/submit/1
+
+      Forms  0
+        None
+
+      Key Values
         Teacher  Mr. Smith
         Class    12A
 
-        Instructions
-          Complete all exercises by the due date.
-
-      Table: Exercise List  2 rows
-        Subject   Due Date
-        Math      2026-07-25
-        English   2026-07-28
-
-      Links  1
-        Submit  /iserv/exercise/submit/1
-
-      Attachments  2
-        • worksheet.pdf
-        • notes.pdf
-
-      12.1 KB page  · 1 tables  · 1 links  · 0 forms
+      Metadata
+        User          student
+        Csrf present  yes
       "
     `);
   });
@@ -322,16 +328,17 @@ describe("human output", () => {
       ),
     ).toMatchInlineSnapshot(`
       "Legacy
-      ● Available  200 · 10 ms
-      Route  test.route
+      ● OK  200 · 10 ms
 
-      Page structure
-        Headings       2
-        Tables         1
-        Table Rows     3
-        Links          5
-        Forms          {"GET":1}
-        Response size  5000 bytes
+      Kind        html-structure
+      Bytes       5000
+      Links       5
+      Headings    2
+      Tables      1
+      Table Rows  3
+
+      Forms
+        GET  1
       "
     `);
   });
