@@ -23,7 +23,7 @@ const helpStyle = uiStyle();
 program
   .name("iserv")
   .description("A calm, secure command line for your IServ account")
-  .version("0.6.4")
+  .version("0.6.5")
   .showSuggestionAfterError()
   .showHelpAfterError("Run with --help to see available commands.")
   .configureHelp({
@@ -613,6 +613,26 @@ calendar
     }
   });
 calendar
+  .command("plugin <name>")
+  .description("Read events from a calendar plugin (e.g. holiday, exam-plan)")
+  .requiredOption("--start <iso>", "range start YYYY-MM-DD")
+  .requiredOption("--end <iso>", "range end YYYY-MM-DD")
+  .action(async (name: string, options: { start: string; end: string }) => {
+    try {
+      print(
+        await (await restoreClient()).calendar.getPluginEvents(
+          name,
+          options.start,
+          options.end,
+        ),
+        jsonOutput(),
+        { title: `Plugin · ${name}`, empty: "No plugin events in this range." },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+calendar
   .command("search <query>")
   .description("Search visible events in an ISO date range")
   .requiredOption("--start <iso>")
@@ -1078,27 +1098,6 @@ program
   .command("legal")
   .description("Check app legal information")
   .action(() => readRoute("app.legal", "App information"));
-
-program
-  .command("education")
-  .description("Open education connector metadata (read-only)")
-  .command("show")
-  .description("Probe the education launch page")
-  .action(() => readRoute("education.launch", "Education"));
-
-program
-  .command("excalidraw")
-  .description("Open Excalidraw metadata (read-only)")
-  .command("show")
-  .description("Probe the Excalidraw page")
-  .action(() => readRoute("excalidraw.launch", "Excalidraw"));
-
-program
-  .command("pinboard")
-  .description("List pinboard entries when available")
-  .command("list")
-  .description("List pinboard entries")
-  .action(() => readRoute("pinboard.list", "Pinboard"));
 
 program.parseAsync().catch((error) => {
   if (!(error instanceof CommanderExit)) fail(error, jsonOutput());

@@ -247,7 +247,16 @@ export function formatHuman(
   const maxRows = options.maxRows ?? 25;
   const style = uiStyle(color);
   const lines: string[] = [];
-  if (options.title) lines.push(renderHeading(options.title, color));
+  const structured =
+    isRecord(safe) &&
+    (isTimetableData(safe) ||
+      isModuleList(safe) ||
+      (Array.isArray(safe.rows) &&
+        (Boolean(safe.headers) || typeof safe.title === "string")));
+  // Structured renderers print their own titles — avoid News/News doubles
+  if (options.title && !structured) {
+    lines.push(renderHeading(options.title, color));
+  }
 
   if (
     safe === null ||
@@ -255,13 +264,7 @@ export function formatHuman(
     (Array.isArray(safe) && safe.length === 0)
   ) {
     lines.push(style.dim(options.empty ?? "Nothing to show."));
-  } else if (
-    isRecord(safe) &&
-    (isTimetableData(safe) ||
-      isModuleList(safe) ||
-      (Array.isArray(safe.rows) &&
-        (Boolean(safe.headers) || typeof safe.title === "string")))
-  ) {
+  } else if (structured) {
     lines.push(
       ...renderStructuredData(safe, style, { color, width, maxRows }),
     );
@@ -621,6 +624,13 @@ function renderStructuredData(
       .filter(Boolean)
       .join(" \u00B7 ");
     lines.push(renderHeading("Timetable", options.color, detail || undefined));
+    if (value.requestedStart) {
+      lines.push(
+        style.dim(
+          `Week snapped from ${String(value.requestedStart)} to Monday ${String(value.startDate)}`,
+        ),
+      );
+    }
     const rows = value.rows as Array<Record<string, unknown>>;
     lines.push(...renderTable(rows, { ...options, maxRows: options.maxRows ?? 20 }));
     const changes = Array.isArray(value.changes) ? value.changes : [];
@@ -630,6 +640,16 @@ function renderStructuredData(
         renderHeading("Changes", options.color, `${changes.length}`),
         ...renderTable(normalizeRows(changes), options),
       );
+    } else if (isRecord(value.visibility)) {
+      const note = value.visibility.note ? String(value.visibility.note) : undefined;
+      const url = value.visibility.substitutionsUrl
+        ? String(value.visibility.substitutionsUrl)
+        : undefined;
+      if (note || url) {
+        lines.push("");
+        if (note) lines.push(style.dim(note));
+        if (url) lines.push(style.dim(`Substitutions: ${url}`));
+      }
     }
     return lines;
   }
@@ -781,7 +801,8 @@ export function fail(error: unknown, json = false): never {
       : undefined;
   const code = status && status >= 400 && status < 600 ? status : errorExitCode(message);
   if (json) {
-    process.stderr.write(
+    // Always emit one JSON object on stdout so --json pipelines stay valid
+    process.stdout.write(
       `${JSON.stringify({
         error: message,
         code,

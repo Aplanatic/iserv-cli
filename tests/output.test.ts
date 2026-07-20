@@ -379,7 +379,7 @@ describe("automation and errors", () => {
     expect(process.exitCode).toBe(3);
 
     process.exitCode = undefined;
-    const json = captureStderr(() => {
+    const json = captureStdout(() => {
       expect(() => fail(new Error("No active session"), true)).toThrow(
         CommanderExit,
       );
