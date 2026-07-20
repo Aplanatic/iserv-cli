@@ -23,7 +23,7 @@ const helpStyle = uiStyle();
 program
   .name("iserv")
   .description("A calm, secure command line for your IServ account")
-  .version("0.6.1")
+  .version("0.6.2")
   .showSuggestionAfterError()
   .showHelpAfterError("Run with --help to see available commands.")
   .configureHelp({
@@ -261,6 +261,9 @@ routes
   )
   .option("--limit <number>", "maximum matches", "25")
   .action(async (query, options) => {
+    if (!String(query).trim()) {
+      fail(new Error("Search query must not be empty."), jsonOutput());
+    }
     const { routeCatalog } = await catalog();
     printRoutes(
       routeCatalog.search(query, {
@@ -286,6 +289,9 @@ program
   .option("--limit <number>", "maximum results per source", "10")
   .action(async (query: string, options: { scope: string; limit: string }) => {
     try {
+      if (!query.trim()) {
+        throw new Error("Search query must not be empty.");
+      }
       const startedAt = performance.now();
       const limit = boundedLimit(options.limit, 50);
       const routePromise =
@@ -370,8 +376,21 @@ routes
         routeIds.map((routeId) => ({ routeId })),
         { concurrency: boundedLimit(options.concurrency, 8) },
       );
+      if (jsonOutput()) {
+        print(
+          results.map((result) => ({
+            routeId: result.routeId,
+            status: result.status,
+            durationMs: result.durationMs,
+            ...(result._summary ? { summary: result._summary } : {}),
+            data: result.data,
+          })),
+          true,
+        );
+        return;
+      }
       for (const result of results) {
-        printReadRoute(result.routeId, result, jsonOutput());
+        printReadRoute(result.routeId, result, false);
         process.stdout.write("\n");
       }
     } catch (error) {
@@ -635,7 +654,7 @@ mail
     try {
       print(
         await (await restoreClient()).email.getEmails({
-          limit: boundedLimit(options.limit),
+          limit: boundedLimit(options.limit, 1000),
         }),
         jsonOutput(),
         { title: "Inbox", empty: "No messages in this mailbox." },
@@ -652,7 +671,7 @@ mail
     try {
       print(
         await (await restoreClient()).email.getEmails({
-          limit: boundedLimit(options.limit),
+          limit: boundedLimit(options.limit, 1000),
         }),
         jsonOutput(),
         { title: "Mail", empty: "No messages in this mailbox." },
@@ -1009,6 +1028,27 @@ program
   .command("legal")
   .description("Check app legal information")
   .action(() => readRoute("app.legal", "App information"));
+
+program
+  .command("education")
+  .description("Open education connector metadata (read-only)")
+  .command("show")
+  .description("Probe the education launch page")
+  .action(() => readRoute("education.launch", "Education"));
+
+program
+  .command("excalidraw")
+  .description("Open Excalidraw metadata (read-only)")
+  .command("show")
+  .description("Probe the Excalidraw page")
+  .action(() => readRoute("excalidraw.launch", "Excalidraw"));
+
+program
+  .command("pinboard")
+  .description("List pinboard entries when available")
+  .command("list")
+  .description("List pinboard entries")
+  .action(() => readRoute("pinboard.list", "Pinboard"));
 
 program.parseAsync().catch((error) => {
   if (!(error instanceof CommanderExit)) fail(error, jsonOutput());

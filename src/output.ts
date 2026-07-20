@@ -759,16 +759,31 @@ function errorHint(message: string): string | undefined {
     return "Run iserv routes search <query> to find a route ID.";
   if (/missing required parameter|name=value/i.test(message))
     return "Pass route parameters with --param name=value.";
+  if (/news id|news entry/i.test(message))
+    return "Run iserv news list to discover readable entry ids.";
+  if (/invalid .*date|start date must/i.test(message))
+    return "Use DD.MM.YYYY or YYYY-MM-DD, and keep start on or before end.";
   return undefined;
 }
 
 export function fail(error: unknown, json = false): never {
   const raw = error instanceof Error ? error.message : String(error);
   const message = redactText(raw);
-  const code = errorExitCode(message);
+  const status =
+    error &&
+    typeof error === "object" &&
+    "status" in error &&
+    typeof (error as { status: unknown }).status === "number"
+      ? (error as { status: number }).status
+      : undefined;
+  const code = status && status >= 400 && status < 600 ? status : errorExitCode(message);
   if (json) {
     process.stderr.write(
-      `${JSON.stringify({ error: message, code })}\n`,
+      `${JSON.stringify({
+        error: message,
+        code,
+        ...(status ? { status } : {}),
+      })}\n`,
     );
   } else {
     const style = uiStyle();
@@ -783,7 +798,7 @@ export function fail(error: unknown, json = false): never {
       );
     }
   }
-  process.exitCode = code;
+  process.exitCode = code >= 256 ? 1 : code;
   throw new CommanderExit();
 }
 
