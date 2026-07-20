@@ -7,6 +7,7 @@ import {
   print,
   printAuthStatus,
   printProfiles,
+  printReadRoute,
   printRoute,
   printRoutes,
   printRouteTree,
@@ -178,6 +179,46 @@ describe("human output", () => {
       ○ archive  student · iserv.example
       ✓ Connected
         Profile  school
+      "
+    `);
+  });
+
+  test("renders a calm read-only module result without page content", () => {
+    expect(
+      captureStdout(() =>
+        printReadRoute(
+          "Past exercises",
+          {
+            routeId: "exercise.past",
+            status: 200,
+            durationMs: 82,
+            data: {
+              kind: "html-structure",
+              bytes: 12345,
+              links: 12,
+              headings: 1,
+              tables: 1,
+              tableRows: 4,
+              forms: { GET: 2, POST: 1 },
+            },
+          },
+          false,
+          { color: false },
+        ),
+      ),
+    ).toMatchInlineSnapshot(`
+      "Past exercises
+      ● Available  200 · 82 ms
+      Route  exercise.past
+
+      Page structure
+        Rows           4
+        Tables         1
+        Headings       1
+        Links          12
+        Response size  12345 bytes
+
+      Read-only check · page content and form values were not returned.
       "
     `);
   });

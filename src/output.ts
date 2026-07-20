@@ -12,6 +12,13 @@ export interface PrintOptions {
   width?: number;
 }
 
+export interface ReadRouteResult {
+  routeId: string;
+  status: number;
+  durationMs: number;
+  data: unknown;
+}
+
 type ProfileDocument = {
   activeProfile?: string | null;
   profiles?: Array<{ name?: string; hostname?: string; username?: string }>;
@@ -499,6 +506,64 @@ export function printSuccess(
   const safe = isRecord(redacted) ? redacted : { result: redacted };
   const lines = [`${style.green("✓")} ${style.bold(message)}`];
   lines.push(...renderKeyValues(Object.entries(safe), color, "  "));
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+export function printReadRoute(
+  title: string,
+  result: ReadRouteResult,
+  json = false,
+  options: PrintOptions = {},
+): void {
+  if (json) {
+    print(result, true);
+    return;
+  }
+  const color = options.color ?? canColor();
+  const style = uiStyle(color);
+  const safe = redactValue(result.data);
+  const structure =
+    isRecord(safe) && safe.kind === "html-structure" ? safe : null;
+  const state =
+    result.status >= 200 && result.status < 300
+      ? style.green("● Available")
+      : style.yellow("● Unexpected response");
+  const lines = [
+    renderHeading(title, color),
+    `${state}  ${style.dim(`${result.status} · ${result.durationMs} ms`)}`,
+    `${style.dim("Route")}  ${result.routeId}`,
+  ];
+
+  if (structure) {
+    lines.push(
+      "",
+      renderHeading("Page structure", color),
+      ...renderKeyValues(
+        [
+          ["rows", structure.tableRows],
+          ["tables", structure.tables],
+          ["headings", structure.headings],
+          ["links", structure.links],
+          ["response size", `${structure.bytes} bytes`],
+        ],
+        color,
+        "  ",
+      ),
+      "",
+      style.dim(
+        "Read-only check · page content and form values were not returned.",
+      ),
+    );
+  } else {
+    lines.push(
+      "",
+      ...renderRecord(isRecord(safe) ? safe : { result: safe }, {
+        color,
+        width: terminalWidth(options.width),
+        maxRows: options.maxRows ?? 25,
+      }),
+    );
+  }
   process.stdout.write(`${lines.join("\n")}\n`);
 }
 

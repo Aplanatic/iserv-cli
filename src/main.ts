@@ -17,6 +17,7 @@ import {
   print,
   printAuthStatus,
   printProfiles,
+  printReadRoute,
   printRoute,
   printRoutes,
   printRouteTree,
@@ -30,7 +31,7 @@ const helpStyle = uiStyle();
 program
   .name("iserv")
   .description("A calm, secure command line for your IServ account")
-  .version("0.2.0")
+  .version("0.3.0")
   .showSuggestionAfterError()
   .showHelpAfterError("Run with --help to see available commands.")
   .configureHelp({
@@ -69,6 +70,22 @@ const withClient = (
   action: (client: IServClient) => Promise<unknown>,
   options: PrintOptions = {},
 ) => run(async () => action(await broker().restore()), options);
+
+async function readRoute(
+  routeId: string,
+  title: string,
+  parameters: Record<string, string | number | boolean> = {},
+): Promise<void> {
+  try {
+    const result = await (await broker().restore()).executeReadRoute(
+      routeId,
+      parameters,
+    );
+    printReadRoute(title, result, jsonOutput());
+  } catch (error) {
+    fail(error, jsonOutput());
+  }
+}
 
 const auth = program
   .command("auth")
@@ -561,6 +578,84 @@ program
       title: "Conference",
     }),
   );
+
+const exercises = program
+  .command("exercises")
+  .description("Check current and past exercises");
+exercises
+  .command("list")
+  .description("Check the current-exercise overview without changing it")
+  .option("--search <query>", "optional server-side search")
+  .action((options: { search?: string }) =>
+    readRoute(
+      "exercise.list",
+      "Current exercises",
+      options.search ? { "filter[search]": options.search } : {},
+    ),
+  );
+exercises
+  .command("past")
+  .description("Check the past-exercise overview")
+  .action(() => readRoute("exercise.past", "Past exercises"));
+
+program
+  .command("timetable")
+  .description("Inspect timetable availability")
+  .command("show")
+  .description("Check the timetable and change sections")
+  .action(() => readRoute("timetable.overview", "Timetable"));
+
+program
+  .command("polls")
+  .description("Inspect polls visible to the account")
+  .command("list")
+  .description("Check the active-polls overview")
+  .action(() => readRoute("poll.list", "Polls"));
+
+program
+  .command("forums")
+  .description("Inspect forums without changing read state")
+  .command("list")
+  .description("Check the forum index; never marks topics as read")
+  .action(() => readRoute("forums.list", "Forums"));
+
+const news = program.command("news").description("Inspect visible news");
+news
+  .command("list")
+  .description("Check the news overview")
+  .option("--search <query>", "optional server-side search")
+  .action((options: { search?: string }) =>
+    readRoute(
+      "news.list",
+      "News",
+      options.search ? { search: options.search } : {},
+    ),
+  );
+news
+  .command("show <id>")
+  .description("Check one news entry by its visible ID")
+  .action((id: string) => readRoute("news.show", "News entry", { id }));
+
+program
+  .command("courses")
+  .description("Inspect course selections")
+  .command("list")
+  .description("Check currently available course selections")
+  .action(() => readRoute("course_selection.list", "Course selections"));
+
+program
+  .command("mailing-lists")
+  .description("Inspect mailing lists without changing them")
+  .command("list")
+  .description("Check visible mailing-list metadata")
+  .action(() => readRoute("mailing_lists.list", "Mailing lists"));
+
+program
+  .command("print")
+  .description("Inspect printing without uploading or deleting files")
+  .command("show")
+  .description("Check print-job metadata")
+  .action(() => readRoute("print.overview", "Printing"));
 
 program.parseAsync().catch((error) => {
   if (!(error instanceof CommanderExit)) fail(error, jsonOutput());

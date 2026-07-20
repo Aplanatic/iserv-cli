@@ -48,6 +48,24 @@ iserv --json auth status
 iserv --json routes search calendar
 ```
 
+Verified normal-user module checks have short, memorable commands:
+
+```sh
+iserv exercises list
+iserv exercises past
+iserv timetable show
+iserv polls list
+iserv forums list
+iserv news list
+iserv courses list
+iserv mailing-lists list
+iserv print show
+```
+
+These commands issue only catalogued GET requests. Their default output confirms module
+availability and shows non-content-bearing page structure; it never prints authenticated
+HTML, form values, account identifiers, or hidden fields.
+
 Human output and debug errors are redacted before display. The real instance URL
 must never be added to this repository, logs, fixtures, screenshots, or issues.
 
