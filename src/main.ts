@@ -31,7 +31,7 @@ const helpStyle = uiStyle();
 program
   .name("iserv")
   .description("A calm, secure command line for your IServ account")
-  .version("0.3.0")
+  .version("0.4.0")
   .showSuggestionAfterError()
   .showHelpAfterError("Run with --help to see available commands.")
   .configureHelp({
@@ -70,6 +70,10 @@ const withClient = (
   action: (client: IServClient) => Promise<unknown>,
   options: PrintOptions = {},
 ) => run(async () => action(await broker().restore()), options);
+const withMessengerClient = (
+  action: (client: IServClient) => Promise<unknown>,
+  options: PrintOptions = {},
+) => run(async () => action(await broker().restoreMessenger()), options);
 
 async function readRoute(
   routeId: string,
@@ -296,14 +300,27 @@ routes
     }
   });
 
-program
+const account = program
   .command("account")
-  .description("Inspect the signed-in account")
+  .description("Inspect the signed-in account");
+account
   .command("show")
   .description("Show your account and visible profile data")
   .action(
     withClient((client) => client.users.getOwnInfo(), { title: "Account" }),
   );
+account
+  .command("info")
+  .description("Check account information and recent login availability")
+  .action(() => readRoute("account.info", "Account information"));
+account
+  .command("settings")
+  .description("Check account settings without changing them")
+  .action(() => readRoute("account.settings", "Account settings"));
+account
+  .command("logins")
+  .description("Check the recent-login security overview")
+  .action(() => readRoute("account.last_logins", "Recent logins"));
 const users = program
   .command("users")
   .description("Find visible users and profiles");
@@ -342,6 +359,10 @@ users
       fail(error, jsonOutput());
     }
   });
+users
+  .command("personal")
+  .description("Check the personal address book without changing contacts")
+  .action(() => readRoute("users.personal", "Personal address book"));
 
 const notifications = program
   .command("notifications")
@@ -419,6 +440,30 @@ calendar
       fail(error, jsonOutput());
     }
   });
+calendar
+  .command("show")
+  .description("Check calendar application availability")
+  .action(() => readRoute("calendar.overview", "Calendar"));
+calendar
+  .command("search <query>")
+  .description("Search visible events in an ISO date range")
+  .requiredOption("--start <iso>")
+  .requiredOption("--end <iso>")
+  .action(async (query, options) => {
+    try {
+      print(
+        await (await broker().restore()).calendar.searchEvents(
+          query,
+          options.start,
+          options.end,
+        ),
+        jsonOutput(),
+        { title: `Calendar matching “${query}”`, empty: "No matching events." },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
 
 const files = program
   .command("files")
@@ -443,6 +488,10 @@ files
       fail(error, jsonOutput());
     }
   });
+files
+  .command("show")
+  .description("Check the file overview without changing files")
+  .action(() => readRoute("files.overview", "Files"));
 
 const mail = program.command("mail").description("Read and send account email");
 mail
@@ -462,6 +511,10 @@ mail
       fail(error, jsonOutput());
     }
   });
+mail
+  .command("status")
+  .description("Check mailbox availability without opening a message")
+  .action(() => readRoute("mail.overview", "Mail"));
 mail
   .command("show <uid>")
   .description("Show one message by UID")
@@ -506,7 +559,7 @@ messenger
   .command("rooms")
   .description("List joined rooms")
   .action(
-    withClient((client) => client.messenger.getRooms(), {
+    withMessengerClient((client) => client.messenger.getRooms(), {
       title: "Messenger rooms",
       empty: "No joined rooms.",
     }),
@@ -518,9 +571,12 @@ messenger
   .action(async (roomId, options) => {
     try {
       print(
-        await (await broker().restore()).messenger.getMessages(roomId, {
-          limit: Number(options.limit),
-        }),
+        await (await broker().restoreMessenger()).messenger.getMessages(
+          roomId,
+          {
+            limit: Number(options.limit),
+          },
+        ),
         jsonOutput(),
         { title: "Messages", empty: "No messages in this page." },
       );
@@ -534,10 +590,9 @@ messenger
   .requiredOption("--body <body>")
   .action(async (roomId, options) => {
     try {
-      const result = await (await broker().restore()).messenger.sendMessage(
-        roomId,
-        options.body,
-      );
+      const result = await (
+        await broker().restoreMessenger()
+      ).messenger.sendMessage(roomId, options.body);
       printSuccess("Message sent", result, jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
@@ -548,10 +603,9 @@ messenger
   .description("Delete a message immediately")
   .action(async (roomId, eventId) => {
     try {
-      const result = await (await broker().restore()).messenger.deleteMessage(
-        roomId,
-        eventId,
-      );
+      const result = await (
+        await broker().restoreMessenger()
+      ).messenger.deleteMessage(roomId, eventId);
       printSuccess("Message deleted", result, jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
@@ -562,12 +616,44 @@ messenger
   .description("Leave a room immediately")
   .action(async (roomId) => {
     try {
-      await (await broker().restore()).messenger.leaveRoom(roomId);
+      await (await broker().restoreMessenger()).messenger.leaveRoom(roomId);
       printSuccess("Room left", { left: true, roomId }, jsonOutput());
     } catch (error) {
       fail(error, jsonOutput());
     }
   });
+messenger
+  .command("members <roomId>")
+  .description("List members of a joined room")
+  .action(async (roomId: string) => {
+    try {
+      print(
+        await (await broker().restoreMessenger()).messenger.getMembers(roomId),
+        jsonOutput(),
+        { title: "Room members", empty: "No visible room members." },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+messenger
+  .command("profile <userId>")
+  .description("Show a visible Matrix profile")
+  .action(async (userId: string) => {
+    try {
+      print(
+        await (await broker().restoreMessenger()).messenger.getProfile(userId),
+        jsonOutput(),
+        { title: "Messenger profile" },
+      );
+    } catch (error) {
+      fail(error, jsonOutput());
+    }
+  });
+messenger
+  .command("status")
+  .description("Check messenger availability without sending anything")
+  .action(() => readRoute("messenger.overview", "Messenger"));
 program
   .command("conference")
   .description("Inspect videoconference availability")
@@ -656,6 +742,41 @@ program
   .command("show")
   .description("Check print-job metadata")
   .action(() => readRoute("print.overview", "Printing"));
+
+program
+  .command("etherpads")
+  .description("Inspect collaborative pads without editing them")
+  .command("list")
+  .description("Check visible Etherpads")
+  .action(() => readRoute("etherpad.list", "Etherpads"));
+
+program
+  .command("groups")
+  .description("Inspect group availability")
+  .command("list")
+  .description("Check visible groups without joining or leaving")
+  .action(() => readRoute("groupview.overview", "Groups"));
+
+program
+  .command("help")
+  .description("Inspect instance-provided help")
+  .command("show")
+  .description("Check installed help documentation")
+  .action(() => readRoute("help.overview", "Help"));
+
+program
+  .command("office")
+  .description("Inspect office integration availability")
+  .command("show")
+  .description("Check the office entry point without opening a document")
+  .action(() => readRoute("office.overview", "Office"));
+
+program
+  .command("app")
+  .description("Inspect application information")
+  .command("legal")
+  .description("Check app legal information")
+  .action(() => readRoute("app.legal", "App information"));
 
 program.parseAsync().catch((error) => {
   if (!(error instanceof CommanderExit)) fail(error, jsonOutput());

@@ -1,6 +1,6 @@
 {
   "name": "@aplanatic/iserv-cli",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Cross-platform CLI for normal-user IServ access",
   "type": "module",
   "bin": {
@@ -18,12 +18,13 @@
     "lint:fix": "biome check --write src tests",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:live": "npm run build && node scripts/live-smoke.mjs",
     "check:sensitive": "node scripts/check-sensitive.mjs",
     "check": "npm run check:sensitive && npm run lint && npm run typecheck && npm test && npm run build",
     "prepare": "npm run build"
   },
   "dependencies": {
-    "@aplanatic/iserv-api": "^1.6.0",
+    "@aplanatic/iserv-api": "^1.7.1",
     "@inquirer/prompts": "^7.8.6",
     "commander": "^14.0.2",
     "open": "^11.0.0"

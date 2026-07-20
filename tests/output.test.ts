@@ -143,7 +143,37 @@ describe("human output", () => {
     expect(
       captureStdout(() => {
         printAuthStatus(
-          { profile: "school", configured: true, authenticated: true },
+          {
+            profile: "school",
+            configured: true,
+            authenticated: true,
+            account: { username: "student", displayName: "Example Student" },
+            capabilitiesVerified: true,
+            capabilities: [
+              {
+                module: "calendar",
+                access: "available",
+                catalogued: {
+                  read: 4,
+                  write: 0,
+                  communicative: 1,
+                  destructive: 1,
+                },
+                verifiedReadRoutes: 3,
+              },
+              {
+                module: "pinboard",
+                access: "experimental",
+                catalogued: {
+                  read: 0,
+                  write: 0,
+                  communicative: 0,
+                  destructive: 0,
+                },
+                verifiedReadRoutes: 0,
+              },
+            ],
+          },
           false,
           { color: false },
         );
@@ -174,6 +204,15 @@ describe("human output", () => {
       "Session
       ● Connected
       Profile  school
+      Name     Example Student
+      Username student
+
+      Capabilities  1 available · live checked
+        Module     Access         Verified Reads   Catalogued
+        calendar   available      3                4 read · 1 send/create · 1 destruct…
+        pinboard   experimental   0                0 read
+
+      1 module(s) are experimental, unavailable, or not installed. Write permissions are checked only when an action runs.
       Profiles  2
       ● school   student · iserv.example
       ○ archive  student · iserv.example

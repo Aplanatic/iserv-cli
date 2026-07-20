@@ -60,11 +60,23 @@ iserv news list
 iserv courses list
 iserv mailing-lists list
 iserv print show
+iserv etherpads list
+iserv groups list
+iserv office show
 ```
 
 These commands issue only catalogued GET requests. Their default output confirms module
 availability and shows non-content-bearing page structure; it never prints authenticated
 HTML, form values, account identifiers, or hidden fields.
+
+`iserv auth status` shows the verified display name, username, installed modules,
+experimental/unavailable integrations, verified read-route counts, and the number of
+catalogued write/send/destructive actions. A listed write action is not a promise of
+permission: IServ checks the account's rights when that action is actually invoked.
+
+For a local authenticated, read-only production-path check, run
+`npm run test:live`. It reports only pass/fail booleans and does not print account
+names, room names, messages, hostnames, or response bodies.
 
 Human output and debug errors are redacted before display. The real instance URL
 must never be added to this repository, logs, fixtures, screenshots, or issues.

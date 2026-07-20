@@ -1,4 +1,5 @@
 import {
+  type AuthStatus,
   type RouteDefinition,
   redactText,
   redactValue,
@@ -460,11 +461,7 @@ export function printProfiles(
 }
 
 export function printAuthStatus(
-  status: {
-    profile: string | null;
-    configured: boolean;
-    authenticated: boolean;
-  },
+  status: AuthStatus,
   json = false,
   options: PrintOptions = {},
 ): void {
@@ -481,6 +478,71 @@ export function printAuthStatus(
       : style.dim("○ Not connected");
   const lines = [renderHeading("Session", color), state];
   if (status.profile) lines.push(`${style.dim("Profile")}  ${status.profile}`);
+  if (status.account?.displayName)
+    lines.push(`${style.dim("Name")}     ${status.account.displayName}`);
+  if (status.account?.username)
+    lines.push(`${style.dim("Username")} ${status.account.username}`);
+  if (status.capabilities?.length) {
+    const available = status.capabilities.filter(
+      (item) => item.access === "available",
+    );
+    const limited = status.capabilities.filter(
+      (item) => item.access !== "available",
+    );
+    lines.push(
+      "",
+      renderHeading(
+        "Capabilities",
+        color,
+        `${available.length} available · ${status.capabilitiesVerified === false ? "live check unavailable" : "live checked"}`,
+      ),
+      ...renderTable(
+        status.capabilities.map((item) => ({
+          module: item.module,
+          access: item.access,
+          verifiedReads: item.verifiedReadRoutes,
+          catalogued: [
+            `${item.catalogued.read} read`,
+            item.catalogued.write ? `${item.catalogued.write} write` : "",
+            item.catalogued.communicative
+              ? `${item.catalogued.communicative} send/create`
+              : "",
+            item.catalogued.destructive
+              ? `${item.catalogued.destructive} destructive`
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        })),
+        {
+          color,
+          width: terminalWidth(options.width),
+          maxRows: options.maxRows ?? 40,
+        },
+      ),
+    );
+    if (status.capabilitiesVerified === false) {
+      lines.push(
+        "",
+        style.yellow(
+          "Module availability could not be refreshed; all entries are shown as unknown.",
+        ),
+      );
+    }
+    if (limited.length > 0) {
+      lines.push(
+        "",
+        style.dim(
+          `${limited.length} module(s) are experimental, unavailable, or not installed. Write permissions are checked only when an action runs.`,
+        ),
+      );
+    } else {
+      lines.push(
+        "",
+        style.dim("Write permissions are checked only when an action runs."),
+      );
+    }
+  }
   if (!status.authenticated) {
     lines.push(
       "",
