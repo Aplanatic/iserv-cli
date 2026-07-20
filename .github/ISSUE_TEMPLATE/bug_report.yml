@@ -1,0 +1,39 @@
+name: Sanitized bug report
+description: Report a CLI problem without live instance or account data.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Security vulnerabilities belong in private vulnerability reporting. Never paste
+        real hostnames, identities, screenshots, HAR files, credentials, or live output.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Privacy checks
+      options:
+        - label: This is not a security vulnerability.
+          required: true
+        - label: All instance, account, and command data is synthetic or redacted.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: CLI version
+      placeholder: 0.5.1
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal sanitized command
+      render: sh
+    validations:
+      required: true

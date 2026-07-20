@@ -1,11 +1,11 @@
 # Aplanatic IServ CLI
 
-Private, unofficial command-line access to the normal-user features of an
-IServ instance. It does not require or attempt to obtain administrator rights.
+Unofficial command-line access to the normal-user features of an IServ instance. It does
+not require or attempt to obtain administrator rights.
 
 ## Install
 
-Authenticate npm for the private Aplanatic GitHub Packages registry, then run:
+Configure npm authentication for the Aplanatic GitHub Packages registry, then run:
 
 ```sh
 npm install --global @aplanatic/iserv-cli
@@ -113,5 +113,12 @@ search paths stay lightweight.
 
 Human output and debug errors are redacted before display. The real instance URL
 must never be added to this repository, logs, fixtures, screenshots, or issues.
+
+## Security and contributing
+
+Read [SECURITY.md](SECURITY.md) before reporting a vulnerability and use GitHub private
+vulnerability reporting. Never put a real hostname, identity, screenshot, HAR file,
+credential, cookie, token, or command output from a live account in an issue or pull
+request. See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and sanitization rules.
 
 This software is not affiliated with or endorsed by IServ GmbH.
