@@ -33,7 +33,7 @@ import {
 import { parseParameters } from "./parameters.js";
 
 const CLI_NAME = "@aplanatic/iserv-cli";
-const CLI_VERSION = "0.6.12";
+const CLI_VERSION = "0.6.13";
 const DEFAULT_LIMIT = String(CONFIG_DEFAULTS.defaultLimit);
 
 const program = new Command();
@@ -1191,7 +1191,9 @@ files
 files
   .command("ls [path]")
   .alias("list")
-  .description("List a WebDAV directory (default: /)")
+  .description(
+    "List a WebDAV directory (default: /). Requires WebDAV access and a stored password (not available for many student accounts or browser/ephemeral logins).",
+  )
   .action(async (folderPath = "/") => {
     try {
       print(
@@ -1200,6 +1202,29 @@ files
         { title: `WebDAV ${folderPath}`, empty: "Directory is empty." },
       );
     } catch (error) {
+      const status =
+        error &&
+        typeof error === "object" &&
+        "status" in error &&
+        typeof (error as { status: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : error &&
+              typeof error === "object" &&
+              "response" in error &&
+              typeof (error as { response?: { statusCode?: number } }).response
+                ?.statusCode === "number"
+            ? (error as { response: { statusCode: number } }).response
+                .statusCode
+            : undefined;
+      if (status === 401 || status === 403) {
+        fail(
+          new Error(
+            `WebDAV listing failed (${status}). This account may not have WebDAV access (common for student roles), or the session has no stored password (use terminal login without --ephemeral).`,
+          ),
+          jsonOutput(),
+        );
+        return;
+      }
       fail(error, jsonOutput());
     }
   });
@@ -1491,7 +1516,7 @@ messenger
     }
   });
 messenger
-  .command("send <room>")
+  .command("send [room]")
   .description(
     "Send a room message (requires --confirm). Room may be a Matrix id (!…) or unique room name.",
   )
@@ -1507,7 +1532,7 @@ messenger
   )
   .action(
     async (
-      room: string,
+      room: string | undefined,
       options: {
         body?: string;
         text?: string;
@@ -1517,6 +1542,19 @@ messenger
     ) => {
       try {
         const body = options.body ?? options.text;
+        if (isDryRun()) {
+          gateWrite(options, "messenger send", {
+            room: room ?? null,
+            body: body ?? null,
+            idempotencyKey: options.idempotencyKey?.trim() || null,
+          });
+          return;
+        }
+        if (!room) {
+          throw new Error(
+            "Missing room argument. Pass a room id (!…) or unique room name.",
+          );
+        }
         if (!body) {
           throw new Error(
             "Provide --body <text> (or --text). Pass a room id (!…) or unique room name.",
@@ -2112,8 +2150,11 @@ configCmd
           throw new Error(`${key} must be a positive integer`);
         }
         current[key] = value;
-      } else if (key === "host" || key === "profile") {
-        current[key] = raw;
+      } else if (key === "host") {
+        const { normalizeInstanceUrl } = await api();
+        current.host = normalizeInstanceUrl(raw).hostname;
+      } else if (key === "profile") {
+        current.profile = raw;
       }
       const path = await saveCliConfig(directory, current);
       runtimeConfig = mergeConfig(current, await loadProjectConfig());
@@ -2132,35 +2173,74 @@ program
   .description("Print a bash or zsh completion script")
   .action((shell: string) => {
     try {
-      const names = program.commands
+      const topLevel = program.commands
         .filter((sub) => !(sub as Command & { _hidden?: boolean })._hidden)
         .map((sub) => sub.name())
-        .sort()
-        .join(" ");
+        .sort();
+      const nested: Record<string, string[]> = {};
+      for (const sub of program.commands) {
+        if ((sub as Command & { _hidden?: boolean })._hidden) continue;
+        const children = sub.commands
+          .filter(
+            (child) => !(child as Command & { _hidden?: boolean })._hidden,
+          )
+          .map((child) => child.name())
+          .sort();
+        if (children.length > 0) nested[sub.name()] = children;
+      }
+      const nestedBashCases = Object.entries(nested)
+        .map(
+          ([name, children]) =>
+            `    ${name}) COMPREPLY=( $(compgen -W "${children.join(" ")} help" -- "$cur") ) ;;`,
+        )
+        .join("\n");
+      const names = topLevel.join(" ");
       if (shell === "bash") {
         process.stdout.write(`# iserv bash completion
 _iserv_completions() {
   local cur="\${COMP_WORDS[COMP_CWORD]}"
-  if [[ \${COMP_CWORD} -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "${names} --help --json --debug --verbose --timeout --portable --version" -- "$cur") )
-  fi
+  local cmd="\${COMP_WORDS[1]}"
+  case \${COMP_CWORD} in
+    1)
+      COMPREPLY=( $(compgen -W "${names} --help --json --debug --verbose --timeout --portable --dry-run --what-if --version" -- "$cur") )
+      ;;
+    2)
+      case "$cmd" in
+${nestedBashCases}
+      esac
+      ;;
+  esac
 }
 complete -F _iserv_completions iserv
 `);
         return;
       }
       if (shell === "zsh") {
+        const nestedZsh = Object.entries(nested)
+          .map(([name, children]) => {
+            const list = children
+              .map((child) => `${child}:'iserv ${name} ${child}'`)
+              .join(" ");
+            return `    ${name})
+      local -a subcommands
+      subcommands=(${list})
+      _describe 'subcommand' subcommands
+      ;;`;
+          })
+          .join("\n");
         process.stdout.write(`# iserv zsh completion
 #compdef iserv
 _iserv() {
   local -a commands
-  commands=(${names
-    .split(" ")
-    .map((name) => `${name}:'iserv ${name}'`)
-    .join(" ")})
+  commands=(${topLevel.map((name) => `${name}:'iserv ${name}'`).join(" ")})
   _arguments '1:command:->cmds' '*::arg:->args'
   case $state in
     cmds) _describe 'command' commands ;;
+    args)
+      case $words[1] in
+${nestedZsh}
+      esac
+      ;;
   esac
 }
 compdef _iserv iserv

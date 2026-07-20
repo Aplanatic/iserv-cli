@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.13
+
+- Fix messenger rooms/sync Last column (`[object Object]` → message body)
+- `messenger send --dry-run` works without a room argument
+- Clearer `files ls` errors for WebDAV 401/403 (student / no password)
+- `config set host=` validates via `normalizeInstanceUrl`
+- Bash/zsh completion suggests subcommands (`timetable show`, …)
+
 ## 0.6.12
 
 - Mail `--attachment` / `--html-body`; `~` and absolute attachment paths
