@@ -48,7 +48,7 @@ const batchResult = run([
 const batch = parse(batchResult);
 
 const checks = {
-  version: versionResult.status === 0 && versionResult.stdout.trim() === "0.5.0",
+  version: versionResult.status === 0 && versionResult.stdout.trim() === "0.5.1",
   authenticated: authResult.status === 0 && auth.authenticated === true,
   accountNamed:
     Boolean(auth.account?.displayName && auth.account?.username) &&

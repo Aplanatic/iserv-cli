@@ -23,7 +23,7 @@ const helpStyle = uiStyle();
 program
   .name("iserv")
   .description("A calm, secure command line for your IServ account")
-  .version("0.5.0")
+  .version("0.5.1")
   .showSuggestionAfterError()
   .showHelpAfterError("Run with --help to see available commands.")
   .configureHelp({
@@ -268,7 +268,7 @@ routes
         ...(options.method ? { method: options.method.toUpperCase() } : {}),
         ...(options.effect ? { sideEffect: options.effect } : {}),
         ...(options.status ? { status: options.status } : {}),
-        limit: Number(options.limit),
+        limit: boundedLimit(options.limit),
       }),
       query,
       jsonOutput(),
@@ -371,7 +371,7 @@ routes
     try {
       const results = await (await restoreClient()).executeReadRoutes(
         routeIds.map((routeId) => ({ routeId })),
-        { concurrency: Number(options.concurrency) },
+        { concurrency: boundedLimit(options.concurrency, 8) },
       );
       print(results, jsonOutput(), { title: "Read-only batch", maxRows: 8 });
     } catch (error) {

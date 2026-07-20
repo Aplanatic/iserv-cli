@@ -1,6 +1,6 @@
 {
   "name": "@aplanatic/iserv-cli",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Cross-platform CLI for normal-user IServ access",
   "type": "module",
   "bin": {
@@ -24,7 +24,7 @@
     "prepare": "npm run build"
   },
   "dependencies": {
-    "@aplanatic/iserv-api": "^1.7.2",
+    "@aplanatic/iserv-api": "^1.7.3",
     "@inquirer/prompts": "^7.8.6",
     "commander": "^14.0.2",
     "open": "^11.0.0"
@@ -40,11 +40,18 @@
   "engines": {
     "node": ">=22"
   },
+  "keywords": [
+    "iserv",
+    "cli",
+    "school"
+  ],
+  "author": "Aplanatic",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Aplanatic/iserv-cli.git"
   },
+  "homepage": "https://github.com/Aplanatic/iserv-cli#readme",
   "publishConfig": {
     "access": "restricted",
     "registry": "https://npm.pkg.github.com"
