@@ -20,7 +20,7 @@ jobs:
           node-version: 24
           registry-url: https://npm.pkg.github.com
           scope: '@aplanatic'
-      - uses: Aplanatic/iserv-api/.github/actions/install-package@92dae1a7360b6151087718eb8b30d3f46a4e00a1
+      - uses: Aplanatic/iserv-api/.github/actions/install-package@581a796c71f3cc9f944e508b548cb9a05c78f068
       - name: Check package version
         run: test "$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME#v}"
       - run: npm run check
