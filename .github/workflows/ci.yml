@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      - uses: Aplanatic/iserv-api/.github/actions/install-package@581a796c71f3cc9f944e508b548cb9a05c78f068
+      - uses: Aplanatic/iserv-api/.github/actions/install-package@4dea17024dd258b5c8831d5f2fbdd86334295ec2
       - run: npm run check
       - run: npm audit --audit-level=high
 
