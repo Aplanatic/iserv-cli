@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.17
+
+- Pin `@aplanatic/iserv-api@^1.9.0` (automatic session and Matrix token auto-refresh).
+- All CLI commands now transparently re-authenticate when session cookies expire.
+
 ## 0.6.16
 
 - `files ls --json` returns `{ path, items: [...] }` (not a bare array)

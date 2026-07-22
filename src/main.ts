@@ -33,7 +33,7 @@ import {
 import { parseParameters } from "./parameters.js";
 
 const CLI_NAME = "@aplanatic/iserv-cli";
-const CLI_VERSION = "0.6.16";
+const CLI_VERSION = "0.6.17";
 const DEFAULT_LIMIT = String(CONFIG_DEFAULTS.defaultLimit);
 const MAX_TIMEOUT_SECONDS = 300;
 
